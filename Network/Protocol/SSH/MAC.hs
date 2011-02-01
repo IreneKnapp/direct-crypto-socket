@@ -1,4 +1,5 @@
 module Network.Protocol.SSH.MAC (Algorithm(..),
+                                 knownAlgorithmNames,
                                  algorithmCodeLength,
                                  algorithmComputeCode)
   where
@@ -8,12 +9,17 @@ import qualified Data.ByteString as BS
 import Data.Word
 
 
-data Algorithm = None
+data Algorithm = Algorithm_HMAC_SHA1
+               | Algorithm_None
+
+
+knownAlgorithmNames :: [String]
+knownAlgorithmNames = ["hmac-sha1", "none"]
 
 
 algorithmCodeLength :: Algorithm -> Int
-algorithmCodeLength None = 0
+algorithmCodeLength Algorithm_None = 0
 
 
 algorithmComputeCode :: Algorithm -> Word32 -> ByteString -> ByteString
-algorithmComputeCode None _ _ = BS.empty
+algorithmComputeCode Algorithm_None _ _ = BS.empty

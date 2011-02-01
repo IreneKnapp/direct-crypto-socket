@@ -1,5 +1,7 @@
 module Network.Protocol.SSH (
+                             SSHMessage(..),
                              startSSH,
+                             streamSendSSHMessage,
                              streamReadSSHMessage
                             )
   where
@@ -50,9 +52,9 @@ startSSH underlyingStream = do
   openMVar <- newMVar True
   readBufferMVar <- newMVar BS.empty
   sendSequenceNumberMVar <- newMVar 0
-  sendMACAlgorithmMVar <- newMVar MAC.None
+  sendMACAlgorithmMVar <- newMVar MAC.Algorithm_None
   recvSequenceNumberMVar <- newMVar 0
-  recvMACAlgorithmMVar <- newMVar MAC.None
+  recvMACAlgorithmMVar <- newMVar MAC.Algorithm_None
   let sshStream = SSHStream {
                     sshStreamUnderlyingStream = underlyingStream,
                     sshStreamOpen = openMVar,
@@ -173,6 +175,37 @@ sshStreamClose sshStream = do
   streamClose $ sshStreamUnderlyingStream sshStream
 
 
+streamSendSSHMessage :: AbstractStream -> SSHMessage -> IO ()
+streamSendSSHMessage stream message = do
+  case message of
+    SSHMessageKeyExchangeInit { } -> do
+      streamSendWord8 stream 20
+      streamSend stream $ sshMessageCookie message
+      streamSendNameList stream
+       $ sshMessageKeyExchangeAlgorithms message
+      streamSendNameList stream
+       $ sshMessageServerHostKeyAlgorithms message
+      streamSendNameList stream
+       $ sshMessageEncryptionAlgorithmsClientToServer message
+      streamSendNameList stream
+       $ sshMessageEncryptionAlgorithmsServerToClient message
+      streamSendNameList stream
+       $ sshMessageMACAlgorithmsClientToServer message
+      streamSendNameList stream
+       $ sshMessageMACAlgorithmsServerToClient message
+      streamSendNameList stream
+       $ sshMessageCompressionAlgorithmsClientToServer message
+      streamSendNameList stream
+       $ sshMessageCompressionAlgorithmsServerToClient message
+      streamSendNameList stream
+       $ sshMessageLanguagesClientToServer message
+      streamSendNameList stream
+       $ sshMessageLanguagesServerToClient message
+      streamSendBoolean stream
+       $ sshMessageFirstKeyExchangePacketFollows message
+      streamSendWord8 stream 0
+
+
 streamReadSSHMessage :: AbstractStream -> IO (Maybe SSHMessage)
 streamReadSSHMessage stream = do
   maybeMessageType <- streamReadWord8 stream
@@ -248,6 +281,29 @@ streamReadSSHMessage stream = do
     Just 99 -> return Nothing -- Channel success
     Just 100 -> return Nothing -- Channel failure
     _ -> error "Unknown SSH message code."
+
+
+streamSendNameList :: AbstractStream -> [String] -> IO ()
+streamSendNameList stream nameList = do
+  streamSendString stream $ L.intercalate "," nameList
+
+
+streamSendString :: AbstractStream -> String -> IO ()
+streamSendString stream string = do
+  streamSendBinaryString stream $ UTF8.fromString string
+
+
+streamSendBinaryString :: AbstractStream -> ByteString -> IO ()
+streamSendBinaryString stream bytestring = do
+  streamSendWord32 stream $ fromIntegral $ BS.length bytestring
+  streamSend stream bytestring
+
+
+streamSendBoolean :: AbstractStream -> Bool -> IO ()
+streamSendBoolean stream boolean = do
+  streamSendWord8 stream $ case boolean of
+                             False -> 0
+                             True -> 1
 
 
 streamReadNameList :: AbstractStream -> IO (Maybe [String])

@@ -4,9 +4,15 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.UTF8 as UTF8
 import System.Environment
+import System.Random
 
 import Internal.AbstractStreams
 import Network.Protocol.SSH
+import qualified Network.Protocol.SSH.KeyExchange as KeyExchange
+import qualified Network.Protocol.SSH.MAC as MAC
+import qualified Network.Protocol.SSH.ServerHostKey as ServerHostKey
+import qualified Network.Protocol.SSH.Encryption as Encryption
+import qualified Network.Protocol.SSH.Compression as Compression
 
 
 main :: IO ()
@@ -43,8 +49,49 @@ sshClient hostname = do
     Nothing -> error "SSH identification string not received."
     Just identification -> do
       stream <- startSSH stream
+      cookie <- generateCookie
+      streamSendSSHMessage stream
+       $ SSHMessageKeyExchangeInit {
+                             sshMessageCookie = cookie,
+                             sshMessageKeyExchangeAlgorithms =
+                               KeyExchange.knownAlgorithmNames,
+                             sshMessageServerHostKeyAlgorithms =
+                               ServerHostKey.knownAlgorithmNames,
+                             sshMessageEncryptionAlgorithmsClientToServer =
+                               Encryption.knownAlgorithmNames,
+                             sshMessageEncryptionAlgorithmsServerToClient =
+                               Encryption.knownAlgorithmNames,
+                             sshMessageMACAlgorithmsClientToServer =
+                               MAC.knownAlgorithmNames,
+                             sshMessageMACAlgorithmsServerToClient =
+                               MAC.knownAlgorithmNames,
+                             sshMessageCompressionAlgorithmsClientToServer =
+                               Compression.knownAlgorithmNames,
+                             sshMessageCompressionAlgorithmsServerToClient =
+                               Compression.knownAlgorithmNames,
+                             sshMessageLanguagesClientToServer = [],
+                             sshMessageLanguagesServerToClient = [],
+                             sshMessageFirstKeyExchangePacketFollows = False
+                           }
       keyExchangeMessage <- streamReadSSHMessage stream
       putStrLn $ show keyExchangeMessage
       putStrLn $ "Connected."
       putStrLn $ "Disconnecting."
       streamClose stream
+
+
+generateCookie :: IO ByteString
+generateCookie = do
+  mapM (\_ -> getStdRandom random) [1..16] >>= return . BS.pack
+
+
+knownServerHostKeyAlgorithmNames :: [String]
+knownServerHostKeyAlgorithmNames = []
+
+
+knownEncryptionAlgorithmNames :: [String]
+knownEncryptionAlgorithmNames = []
+
+
+knownCompressionAlgorithmNames :: [String]
+knownCompressionAlgorithmNames = []
