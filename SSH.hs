@@ -49,6 +49,9 @@ sshClient hostname = do
     Nothing -> error "SSH identification string not received."
     Just identification -> do
       stream <- startSSH stream
+      let sshTransportState = SSHTransportState {
+                                sshStateUserAuthenticationMode = Nothing
+                              }
       cookie <- generateCookie
       streamSendSSHMessage stream
        $ SSHMessageKeyExchangeInit {
@@ -73,7 +76,7 @@ sshClient hostname = do
                              sshMessageLanguagesServerToClient = [],
                              sshMessageFirstKeyExchangePacketFollows = False
                            }
-      keyExchangeMessage <- streamReadSSHMessage stream
+      keyExchangeMessage <- streamReadSSHMessage stream sshTransportState
       putStrLn $ show keyExchangeMessage
       putStrLn $ "Connected."
       putStrLn $ "Disconnecting."

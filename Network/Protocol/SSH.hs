@@ -1,4 +1,6 @@
 module Network.Protocol.SSH (
+                             SSHTransportState(..),
+                             SSHUserAuthenticationMode(..),
                              SSHMessage(..),
                              startSSH,
                              streamSendSSHMessage,
@@ -30,6 +32,16 @@ data SSHStream = SSHStream {
     sshStreamReadMACAlgorithm :: MVar MAC.Algorithm,
     sshStreamReadSequenceNumber :: MVar Word32
   }
+
+
+data SSHTransportState = SSHTransportState {
+    sshStateUserAuthenticationMode :: Maybe SSHUserAuthenticationMode
+  }
+
+
+data SSHUserAuthenticationMode
+  = SSHUserAuthenticationModePublicKey
+  | SSHUserAuthenticationModePassword
 
 
 data SSHMessage
@@ -326,8 +338,10 @@ streamSendSSHMessage stream message = do
       streamSendWord8 stream 0
 
 
-streamReadSSHMessage :: AbstractStream -> IO (Maybe SSHMessage)
-streamReadSSHMessage stream = do
+streamReadSSHMessage :: AbstractStream
+                     -> SSHTransportState
+                     -> IO (Maybe SSHMessage)
+streamReadSSHMessage stream transportState = do
   maybeMessageType <- streamReadWord8 stream
   case maybeMessageType of
     Nothing -> error "Incoming SSH stream unexpectedly ended."
@@ -347,11 +361,62 @@ streamReadSSHMessage stream = do
                      sshMessageLanguageTag
                        = fromJust maybeLanguageTag
                    }
-    Just 2 -> return Nothing -- Ignore
-    Just 3 -> return Nothing -- Unimplemented
-    Just 4 -> return Nothing -- Debug
-    Just 5 -> return Nothing -- Service request
-    Just 6 -> return Nothing -- Service accept
+    Just 2 -> do
+      maybeMessageData <- streamReadBinaryString stream
+      case maybeMessageData of
+        Nothing -> return Nothing
+        Just _ ->
+          return $ Just
+                 SSHMessageIgnore {
+                     sshMessageData
+                       = fromJust maybeMessageData
+                   }
+    Just 3 -> do
+      maybePacketSequenceNumber <- streamReadWord32 stream
+      case maybePacketSequenceNumber of
+        Nothing -> return Nothing
+        Just _ ->
+          return $ Just
+                 SSHMessageUnimplemented {
+                     sshMessagePacketSequenceNumber
+                       = fromJust maybePacketSequenceNumber
+                   }
+    Just 4 -> do
+      maybeAlwaysDisplay <- streamReadBoolean stream
+      maybeText <- streamReadString stream
+      maybeLanguageTag <- streamReadString stream
+      case maybeLanguageTag of
+        Nothing -> return Nothing
+        Just _ ->
+          return $ Just
+                 SSHMessageDebug {
+                     sshMessageAlwaysDisplay
+                       = fromJust maybeAlwaysDisplay,
+                     sshMessageText
+                       = fromJust maybeText,
+                     sshMessageLanguageTag
+                       = fromJust maybeLanguageTag
+                   }
+    Just 5 -> do
+      maybeServiceName <- streamReadString stream
+      case maybeServiceName of
+        Nothing -> return Nothing
+        Just _ ->
+          return $ Just
+                 SSHMessageServiceRequest {
+                     sshMessageServiceName
+                       = fromJust maybeServiceName
+                   }
+    Just 6 -> do
+      maybeServiceName <- streamReadString stream
+      case maybeServiceName of
+        Nothing -> return Nothing
+        Just _ ->
+          return $ Just
+                 SSHMessageServiceAccept {
+                     sshMessageServiceName
+                       = fromJust maybeServiceName
+                   }
     Just 20 -> do
       maybeCookie <- streamRead stream 16
       maybeKeyExchangeAlgorithms <- streamReadNameList stream
@@ -396,25 +461,264 @@ streamReadSSHMessage stream = do
                      sshMessageFirstKeyExchangePacketFollows
                        = fromJust maybeFirstKeyExchangePacketFollows
                    }
-    Just 21 -> return Nothing -- New keys
-    Just 50 -> return Nothing -- User authentication request
-    Just 51 -> return Nothing -- User authentication failure
-    Just 52 -> return Nothing -- User authentication success
-    Just 53 -> return Nothing -- User authentication banner
-    Just 80 -> return Nothing -- Global request
-    Just 81 -> return Nothing -- Request success
-    Just 82 -> return Nothing -- Request failure
-    Just 90 -> return Nothing -- Channel open
-    Just 91 -> return Nothing -- Channel open confirmation
-    Just 92 -> return Nothing -- Channel open failure
-    Just 93 -> return Nothing -- Channel window adjust
-    Just 94 -> return Nothing -- Channel data
-    Just 95 -> return Nothing -- Channel extended data
-    Just 96 -> return Nothing -- Channel EOF
-    Just 97 -> return Nothing -- Channel close
-    Just 98 -> return Nothing -- Channel request
-    Just 99 -> return Nothing -- Channel success
-    Just 100 -> return Nothing -- Channel failure
+    Just 21 -> do
+      return $ Just $ SSHMessageNewKeys { }
+    Just 50 -> do
+      maybeUserName <- streamReadString stream
+      maybeServiceName <- streamReadString stream
+      maybeMethodName <- streamReadString stream
+      maybeMethodFields <- return $ Just undefined -- TODO
+      case maybeMethodFields of
+        Nothing -> return Nothing
+        Just _ ->
+          return $ Just
+                 SSHMessageUserAuthenticationRequest {
+                     sshMessageUserName
+                       = fromJust maybeUserName,
+                     sshMessageServiceName
+                       = fromJust maybeServiceName,
+                     sshMessageMethodName
+                       = fromJust maybeMethodName,
+                     sshMessageMethodFields
+                       = fromJust maybeMethodFields
+                   }
+    Just 51 -> do
+      maybeAuthenticationMethods <- streamReadNameList stream
+      maybePartialSuccess <- streamReadBoolean stream
+      case maybePartialSuccess of
+        Nothing -> return Nothing
+        Just _ ->
+          return $ Just
+                 SSHMessageUserAuthenticationFailure {
+                     sshMessageAuthenticationMethods
+                       = fromJust maybeAuthenticationMethods,
+                     sshMessagePartialSuccess
+                       = fromJust maybePartialSuccess
+                   }
+    Just 52 -> do
+      return $ Just $ SSHMessageUserAuthenticationSuccess { }
+    Just 53 -> do
+      maybeText <- streamReadString stream
+      maybeLanguageTag <- streamReadString stream
+      case maybeLanguageTag of
+        Nothing -> return Nothing
+        Just _ ->
+          return $ Just
+                 SSHMessageUserAuthenticationBanner {
+                     sshMessageText
+                       = fromJust maybeText,
+                     sshMessageLanguageTag
+                       = fromJust maybeLanguageTag
+                   }
+    Just 60 -> do
+      case sshStateUserAuthenticationMode transportState of
+        Nothing -> error $ "User-authentication SSH message received when "
+                           ++ "transport not in appropriate state."
+        Just SSHUserAuthenticationModePublicKey -> do
+          maybeAlgorithmName <- streamReadString stream
+          maybeBlob <- streamReadBinaryString stream
+          case maybeBlob of
+            Nothing -> return Nothing
+            Just _ -> do
+              return $ Just
+                     SSHMessageUserAuthenticationPublicKeyOkay {
+                         sshMessageAlgorithmName
+                           = fromJust maybeAlgorithmName,
+                         sshMessageBlob
+                           = fromJust maybeBlob
+                       }
+        Just SSHUserAuthenticationModePassword -> do
+          maybeText <- streamReadString stream
+          maybeLanguageTag <- streamReadString stream
+          case maybeLanguageTag of
+            Nothing -> return Nothing
+            Just _ -> do
+              return $ Just
+                     SSHMessageUserAuthenticationPasswordChangeRequest {
+                         sshMessageText
+                           = fromJust maybeText,
+                         sshMessageLanguageTag
+                           = fromJust maybeLanguageTag
+                       }
+    Just 80 -> do
+      maybeRequestName <- streamReadString stream
+      maybeWantReply <- streamReadBoolean stream
+      maybeRequestFields <- return $ Just undefined -- TODO
+      case maybeRequestFields of
+        Nothing -> return Nothing
+        Just _ -> return $ Just
+                         SSHMessageGlobalRequest {
+                             sshMessageRequestName
+                               = fromJust maybeRequestName,
+                             sshMessageWantReply
+                               = fromJust maybeWantReply,
+                             sshMessageRequestFields
+                               = fromJust maybeRequestFields
+                           }
+    Just 81 -> do
+      maybeResponseFields <- return $ Just undefined -- TODO
+      case maybeResponseFields of
+        Nothing -> return Nothing
+        Just _ -> return $ Just
+                         SSHMessageRequestSuccess {
+                             sshMessageResponseFields
+                               = fromJust maybeResponseFields
+                           }
+    Just 82 -> do
+      return $ Just SSHMessageRequestFailure { }
+    Just 90 -> do
+      maybeChannelType <- streamReadString stream
+      maybeSenderChannel <- streamReadWord32 stream
+      maybeInitialWindowSize <- streamReadWord32 stream
+      maybeMaximumPacketSize <- streamReadWord32 stream
+      maybeChannelOpenFields <- return $ Just undefined -- TODO
+      case maybeChannelOpenFields of
+        Nothing -> return Nothing
+        Just _ -> return $ Just
+                         SSHMessageChannelOpen {
+                             sshMessageChannelType
+                               = fromJust maybeChannelType,
+                             sshMessageSenderChannel
+                               = fromJust maybeSenderChannel,
+                             sshMessageInitialWindowSize
+                               = fromJust maybeInitialWindowSize,
+                             sshMessageMaximumPacketSize
+                               = fromJust maybeMaximumPacketSize,
+                             sshMessageChannelOpenFields
+                               = fromJust maybeChannelOpenFields
+                           }
+    Just 91 -> do
+      maybeRecipientChannel <- streamReadWord32 stream
+      maybeSenderChannel <- streamReadWord32 stream
+      maybeInitialWindowSize <- streamReadWord32 stream
+      maybeMaximumPacketSize <- streamReadWord32 stream
+      maybeChannelOpenConfirmationFields <- return $ Just undefined -- TODO
+      case maybeChannelOpenConfirmationFields of
+        Nothing -> return Nothing
+        Just _ -> return $ Just
+                         SSHMessageChannelOpenConfirmation {
+                             sshMessageRecipientChannel
+                               = fromJust maybeRecipientChannel,
+                             sshMessageSenderChannel
+                               = fromJust maybeSenderChannel,
+                             sshMessageInitialWindowSize
+                               = fromJust maybeInitialWindowSize,
+                             sshMessageMaximumPacketSize
+                               = fromJust maybeMaximumPacketSize,
+                             sshMessageChannelOpenConfirmationFields
+                               = fromJust maybeChannelOpenConfirmationFields
+                           }
+    Just 92 -> do
+      maybeRecipientChannel <- streamReadWord32 stream
+      maybeReasonCode <- streamReadWord32 stream
+      maybeDescription <- streamReadString stream
+      maybeLanguageTag <- streamReadString stream
+      case maybeLanguageTag of
+        Nothing -> return Nothing
+        Just _ -> return $ Just
+                         SSHMessageChannelOpenFailure {
+                             sshMessageRecipientChannel
+                               = fromJust maybeRecipientChannel,
+                             sshMessageReasonCode
+                               = fromJust maybeReasonCode,
+                             sshMessageDescription
+                               = fromJust maybeDescription,
+                             sshMessageLanguageTag
+                               = fromJust maybeLanguageTag
+                           }
+    Just 93 -> do
+      maybeRecipientChannel <- streamReadWord32 stream
+      maybeBytesToAdd <- streamReadWord32 stream
+      case maybeBytesToAdd of
+        Nothing -> return Nothing
+        Just _ -> return $ Just
+                         SSHMessageChannelWindowAdjust {
+                             sshMessageRecipientChannel
+                               = fromJust maybeRecipientChannel,
+                             sshMessageBytesToAdd
+                               = fromJust maybeBytesToAdd
+                           }
+    Just 94 -> do
+      maybeRecipientChannel <- streamReadWord32 stream
+      maybeData <- streamReadBinaryString stream
+      case maybeData of
+        Nothing -> return Nothing
+        Just _ -> return $ Just
+                         SSHMessageChannelData {
+                             sshMessageRecipientChannel
+                               = fromJust maybeRecipientChannel,
+                             sshMessageData
+                               = fromJust maybeData
+                           }
+    Just 95 -> do
+      maybeRecipientChannel <- streamReadWord32 stream
+      maybeDataTypeCode <- streamReadWord32 stream
+      maybeData <- streamReadBinaryString stream
+      case maybeData of
+        Nothing -> return Nothing
+        Just _ -> return $ Just
+                         SSHMessageChannelExtendedData {
+                             sshMessageRecipientChannel
+                               = fromJust maybeRecipientChannel,
+                             sshMessageDataTypeCode
+                               = fromJust maybeDataTypeCode,
+                             sshMessageData
+                               = fromJust maybeData
+                           }
+    Just 96 -> do
+      maybeRecipientChannel <- streamReadWord32 stream
+      case maybeRecipientChannel of
+        Nothing -> return Nothing
+        Just _ -> return $ Just
+                         SSHMessageChannelEOF {
+                             sshMessageRecipientChannel
+                               = fromJust maybeRecipientChannel
+                           }
+    Just 97 -> do
+      maybeRecipientChannel <- streamReadWord32 stream
+      case maybeRecipientChannel of
+        Nothing -> return Nothing
+        Just _ -> return $ Just
+                         SSHMessageChannelClose {
+                             sshMessageRecipientChannel
+                               = fromJust maybeRecipientChannel
+                           }
+    Just 98 -> do
+      maybeRecipientChannel <- streamReadWord32 stream
+      maybeRequestType <- streamReadString stream
+      maybeWantReply <- streamReadBoolean stream
+      maybeChannelRequestFields <- return $ Just undefined -- TODO
+      case maybeRecipientChannel of
+        Nothing -> return Nothing
+        Just _ -> return $ Just
+                         SSHMessageChannelRequest {
+                             sshMessageRecipientChannel
+                               = fromJust maybeRecipientChannel,
+                             sshMessageRequestType
+                               = fromJust maybeRequestType,
+                             sshMessageWantReply
+                               = fromJust maybeWantReply,
+                             sshMessageChannelRequestFields
+                               = fromJust maybeChannelRequestFields
+                           }
+    Just 99 -> do
+      maybeRecipientChannel <- streamReadWord32 stream
+      case maybeRecipientChannel of
+        Nothing -> return Nothing
+        Just _ -> return $ Just
+                         SSHMessageChannelSuccess {
+                             sshMessageRecipientChannel
+                               = fromJust maybeRecipientChannel
+                           }
+    Just 100 -> do
+      maybeRecipientChannel <- streamReadWord32 stream
+      case maybeRecipientChannel of
+        Nothing -> return Nothing
+        Just _ -> return $ Just
+                         SSHMessageChannelFailure {
+                             sshMessageRecipientChannel
+                               = fromJust maybeRecipientChannel
+                           }
     _ -> error "Unknown SSH message code."
 
 

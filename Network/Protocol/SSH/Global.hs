@@ -2,6 +2,8 @@ module Network.Protocol.SSH.Global (GlobalRequest(..),
                                     GlobalResponse(..))
   where
 
+import Data.Word
+
 
 data GlobalRequest
   = GlobalRequestTCPIPForwarding {

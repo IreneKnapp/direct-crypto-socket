@@ -1,6 +1,9 @@
 module Network.Protocol.SSH.Authentication (AuthenticationRequest(..))
   where
 
+import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
+
 
 data AuthenticationRequest
   = AuthenticationRequestPublicKeyQuery {
@@ -11,7 +14,7 @@ data AuthenticationRequest
   | AuthenticationRequestPublicKeyActual {
       -- Includes a ghost field set to True
       authenticationRequestAlgorithmName :: String,
-      authenticationRequestPublicKey :: ByteString
+      authenticationRequestPublicKey :: ByteString,
       authenticationRequestSignature :: String
     }
   | AuthenticationRequestPassword {
@@ -20,7 +23,7 @@ data AuthenticationRequest
     }
   | AuthenticationRequestPasswordChange {
       -- Includes a ghost field set to True
-      authenticationRequestOldPassword :: String
+      authenticationRequestOldPassword :: String,
       authenticationRequestNewPassword :: String
     }
   deriving (Show)

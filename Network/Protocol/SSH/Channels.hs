@@ -3,6 +3,8 @@ module Network.Protocol.SSH.Channels (ChannelOpen(..),
                                       ChannelRequest(..))
   where
 
+import Data.Word
+
 
 data ChannelOpen
   = ChannelOpenX11 {
@@ -78,5 +80,4 @@ data ChannelRequest
       channelRequestMessage :: String,
       channelRequestLanguageTag :: String
     }
-  | 
   deriving (Show)
