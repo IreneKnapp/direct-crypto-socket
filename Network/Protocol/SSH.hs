@@ -37,7 +37,8 @@ data SSHStream = SSHStream {
 
 data SSHTransportState = SSHTransportState {
     sshTransportStateUserAuthenticationMode :: Maybe SSHUserAuthenticationMode,
-    sshTransportStateGlobalRequestsPending :: [SSHMessage]
+    sshTransportStateGlobalRequestsPendingSelfAsSender :: [SSHMessage],
+    sshTransportStateGlobalRequestsPendingSelfAsRecipient :: [SSHMessage]
   }
 
 
@@ -199,7 +200,9 @@ startSSH underlyingStream = do
       transportState = SSHTransportState {
                           sshTransportStateUserAuthenticationMode
                             = Nothing,
-                          sshTransportStateGlobalRequestsPending
+                          sshTransportStateGlobalRequestsPendingSelfAsSender
+                            = [],
+                          sshTransportStateGlobalRequestsPendingSelfAsRecipient
                             = []
                        }
   return (stream, transportState)
@@ -350,7 +353,9 @@ streamSendSSHMessage stream message = do
 
 streamReadSSHMessage :: AbstractStream
                      -> SSHTransportState
-                     -> IO (Maybe (SSHMessage, SSHTransportState))
+                     -> IO (Maybe (SSHMessage,
+                                   Maybe SSHMessage,
+                                   SSHTransportState))
 streamReadSSHMessage stream transportState = do
   maybeMessageType <- streamReadWord8 stream
   case maybeMessageType of
@@ -371,6 +376,7 @@ streamReadSSHMessage stream transportState = do
                       sshMessageLanguageTag
                         = fromJust maybeLanguageTag
                     },
+                  Nothing,
                   transportState)
     Just 2 -> do
       maybeMessageData <- streamReadBinaryString stream
@@ -382,6 +388,7 @@ streamReadSSHMessage stream transportState = do
                       sshMessageData
                         = fromJust maybeMessageData
                     },
+                  Nothing,
                   transportState)
     Just 3 -> do
       maybePacketSequenceNumber <- streamReadWord32 stream
@@ -393,6 +400,7 @@ streamReadSSHMessage stream transportState = do
                       sshMessagePacketSequenceNumber
                         = fromJust maybePacketSequenceNumber
                     },
+                  Nothing,
                   transportState)
     Just 4 -> do
       maybeAlwaysDisplay <- streamReadBoolean stream
@@ -410,6 +418,7 @@ streamReadSSHMessage stream transportState = do
                       sshMessageLanguageTag
                         = fromJust maybeLanguageTag
                     },
+                  Nothing,
                   transportState)
     Just 5 -> do
       maybeServiceName <- streamReadString stream
@@ -421,6 +430,7 @@ streamReadSSHMessage stream transportState = do
                       sshMessageServiceName
                         = fromJust maybeServiceName
                     },
+                  Nothing,
                   transportState)
     Just 6 -> do
       maybeServiceName <- streamReadString stream
@@ -432,6 +442,7 @@ streamReadSSHMessage stream transportState = do
                       sshMessageServiceName
                         = fromJust maybeServiceName
                     },
+                  Nothing,
                   transportState)
     Just 20 -> do
       maybeCookie <- streamRead stream 16
@@ -477,9 +488,12 @@ streamReadSSHMessage stream transportState = do
                       sshMessageFirstKeyExchangePacketFollows
                         = fromJust maybeFirstKeyExchangePacketFollows
                     },
+                  Nothing,
                   transportState)
     Just 21 -> do
-      return $ Just (SSHMessageNewKeys { }, transportState)
+      return $ Just (SSHMessageNewKeys { },
+                     Nothing,
+                     transportState)
     Just 50 -> do
       maybeUserName <- streamReadString stream
       maybeServiceName <- streamReadString stream
@@ -503,6 +517,7 @@ streamReadSSHMessage stream transportState = do
                       sshMessageMethodFields
                         = fromJust maybeMethodFields
                     },
+                  Nothing,
                   transportState)
     Just 51 -> do
       maybeAuthenticationMethods <- streamReadNameList stream
@@ -517,9 +532,12 @@ streamReadSSHMessage stream transportState = do
                       sshMessagePartialSuccess
                         = fromJust maybePartialSuccess
                     },
+                  Nothing,
                   transportState)
     Just 52 -> do
-      return $ Just (SSHMessageUserAuthenticationSuccess { }, transportState)
+      return $ Just (SSHMessageUserAuthenticationSuccess { },
+                     Nothing,
+                     transportState)
     Just 53 -> do
       maybeText <- streamReadString stream
       maybeLanguageTag <- streamReadString stream
@@ -533,6 +551,7 @@ streamReadSSHMessage stream transportState = do
                       sshMessageLanguageTag
                         = fromJust maybeLanguageTag
                     },
+                  Nothing,
                   transportState)
     Just 60 -> do
       case sshTransportStateUserAuthenticationMode transportState of
@@ -551,6 +570,7 @@ streamReadSSHMessage stream transportState = do
                           sshMessageBlob
                             = fromJust maybeBlob
                         },
+                      Nothing,
                       transportState)
         Just SSHUserAuthenticationModePassword -> do
           maybeText <- streamReadString stream
@@ -565,35 +585,78 @@ streamReadSSHMessage stream transportState = do
                           sshMessageLanguageTag
                             = fromJust maybeLanguageTag
                         },
+                      Nothing,
                       transportState)
     Just 80 -> do
       maybeRequestName <- streamReadString stream
       maybeWantReply <- streamReadBoolean stream
-      maybeRequestFields <- return $ Just undefined -- TODO
+      maybeRequestFields
+        <- case maybeRequestName of
+             Nothing -> return Nothing
+             Just requestName ->
+               Global.streamReadRequestFields stream requestName
       case maybeRequestFields of
         Nothing -> return Nothing
-        Just _ -> return $ Just
-                         (SSHMessageGlobalRequest {
-                              sshMessageRequestName
-                                = fromJust maybeRequestName,
-                              sshMessageWantReply
-                                = fromJust maybeWantReply,
-                              sshMessageRequestFields
-                                = fromJust maybeRequestFields
-                            },
-                          transportState)
+        Just _ -> do
+          let result = SSHMessageGlobalRequest {
+                           sshMessageRequestName
+                             = fromJust maybeRequestName,
+                           sshMessageWantReply
+                             = fromJust maybeWantReply,
+                           sshMessageRequestFields
+                             = fromJust maybeRequestFields
+                         }
+              oldRequestsPending
+                = sshTransportStateGlobalRequestsPendingSelfAsRecipient
+                   transportState
+              newRequestsPending
+                = oldRequestsPending ++ [result]
+          transportState
+            <- return transportState {
+                          sshTransportStateGlobalRequestsPendingSelfAsRecipient
+                            = newRequestsPending
+                        }
+          return $ Just (result,
+                         Nothing,
+                         transportState)
     Just 81 -> do
-      maybeResponseFields <- return $ Just undefined -- TODO
+      let oldRequestsPending
+            = sshTransportStateGlobalRequestsPendingSelfAsSender
+               transportState
+          (maybeMatchingRequest, newRequestsPending)
+            = case oldRequestsPending of
+                [] -> (Nothing, [])
+                (matchingRequest:rest) -> (Just matchingRequest, rest)
+          maybeRequestName
+            = fmap sshMessageRequestName maybeMatchingRequest
+      transportState
+        <- return transportState {
+                      sshTransportStateGlobalRequestsPendingSelfAsSender
+                        = newRequestsPending
+                    }
+      maybeResponseFields
+        <- case maybeRequestName of
+             Nothing -> error $ "SSH global response received "
+                              ++ "without matching request."
+             Just requestName ->
+                Global.streamReadResponseFields
+                 stream
+                 requestName
+                 (sshMessageRequestFields $ fromJust maybeMatchingRequest)
       case maybeResponseFields of
         Nothing -> return Nothing
-        Just _ -> return $ Just
-                         (SSHMessageRequestSuccess {
-                              sshMessageResponseFields
-                                = fromJust maybeResponseFields
-                            },
-                          transportState)
+        Just _ -> do
+          let result = SSHMessageRequestSuccess {
+                           sshMessageResponseFields
+                             = fromJust maybeResponseFields
+                         }
+          return $ Just (result,
+                         maybeMatchingRequest,
+                         transportState)
     Just 82 -> do
-      return $ Just (SSHMessageRequestFailure { }, transportState)
+      return $ Just (SSHMessageRequestFailure { },
+                     Nothing,
+                     transportState)
     Just 90 -> do
       maybeChannelType <- streamReadString stream
       maybeSenderChannel <- streamReadWord32 stream
@@ -615,6 +678,7 @@ streamReadSSHMessage stream transportState = do
                               sshMessageChannelOpenFields
                                 = fromJust maybeChannelOpenFields
                             },
+                          Nothing,
                           transportState)
     Just 91 -> do
       maybeRecipientChannel <- streamReadWord32 stream
@@ -637,6 +701,7 @@ streamReadSSHMessage stream transportState = do
                               sshMessageChannelOpenConfirmationFields
                                 = fromJust maybeChannelOpenConfirmationFields
                             },
+                          Nothing,
                           transportState)
     Just 92 -> do
       maybeRecipientChannel <- streamReadWord32 stream
@@ -656,6 +721,7 @@ streamReadSSHMessage stream transportState = do
                               sshMessageLanguageTag
                                 = fromJust maybeLanguageTag
                             },
+                          Nothing,
                           transportState)
     Just 93 -> do
       maybeRecipientChannel <- streamReadWord32 stream
@@ -669,6 +735,7 @@ streamReadSSHMessage stream transportState = do
                               sshMessageBytesToAdd
                                 = fromJust maybeBytesToAdd
                             },
+                          Nothing,
                           transportState)
     Just 94 -> do
       maybeRecipientChannel <- streamReadWord32 stream
@@ -682,6 +749,7 @@ streamReadSSHMessage stream transportState = do
                               sshMessageData
                                 = fromJust maybeData
                             },
+                          Nothing,
                           transportState)
     Just 95 -> do
       maybeRecipientChannel <- streamReadWord32 stream
@@ -698,6 +766,7 @@ streamReadSSHMessage stream transportState = do
                               sshMessageData
                                 = fromJust maybeData
                             },
+                          Nothing,
                           transportState)
     Just 96 -> do
       maybeRecipientChannel <- streamReadWord32 stream
@@ -708,6 +777,7 @@ streamReadSSHMessage stream transportState = do
                               sshMessageRecipientChannel
                                 = fromJust maybeRecipientChannel
                             },
+                          Nothing,
                           transportState)
     Just 97 -> do
       maybeRecipientChannel <- streamReadWord32 stream
@@ -718,6 +788,7 @@ streamReadSSHMessage stream transportState = do
                               sshMessageRecipientChannel
                                 = fromJust maybeRecipientChannel
                             },
+                          Nothing,
                           transportState)
     Just 98 -> do
       maybeRecipientChannel <- streamReadWord32 stream
@@ -737,6 +808,7 @@ streamReadSSHMessage stream transportState = do
                               sshMessageChannelRequestFields
                                 = fromJust maybeChannelRequestFields
                             },
+                          Nothing,
                           transportState)
     Just 99 -> do
       maybeRecipientChannel <- streamReadWord32 stream
@@ -747,6 +819,7 @@ streamReadSSHMessage stream transportState = do
                               sshMessageRecipientChannel
                                 = fromJust maybeRecipientChannel
                             },
+                          Nothing,
                           transportState)
     Just 100 -> do
       maybeRecipientChannel <- streamReadWord32 stream
@@ -757,5 +830,6 @@ streamReadSSHMessage stream transportState = do
                               sshMessageRecipientChannel
                                 = fromJust maybeRecipientChannel
                             },
+                          Nothing,
                           transportState)
     _ -> error "Unknown SSH message code."

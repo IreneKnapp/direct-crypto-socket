@@ -76,7 +76,7 @@ sshClient hostname = do
       maybeResult <- streamReadSSHMessage stream transportState
       case maybeResult of
         Nothing -> error "Unexpectedly disconnected."
-        Just (keyExchangeMessage, transportState) -> do
+        Just (keyExchangeMessage, maybeOriginalMessage, transportState) -> do
           putStrLn $ show keyExchangeMessage
           putStrLn $ "Connected."
           putStrLn $ "Disconnecting."
