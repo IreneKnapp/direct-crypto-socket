@@ -1,9 +1,8 @@
 module Internal.AbstractStreams (AbstractStream(..),
                                  connectToHostname,
-                                 streamRecvCRLF,
-                                 streamRecvByteString,
-                                 streamRecvWord32,
-                                 streamRecvWord8
+                                 streamReadCRLF,
+                                 streamReadWord32,
+                                 streamReadWord8
                                 )
   where
 
@@ -20,9 +19,14 @@ import Network.Socket.ByteString
 
 data AbstractStream = AbstractStream {
     streamSend :: ByteString -> IO (),
-    streamRecv :: Int -> IO ByteString,
-    streamClose :: IO (),
-    streamReadBuffer :: MVar ByteString
+    streamRead :: Int -> IO (Maybe ByteString),
+    streamClose :: IO ()
+  }
+
+
+data SocketStream = SocketStream {
+    socketStreamSocket :: Socket,
+    socketStreamReadBuffer :: MVar ByteString
   }
 
 
@@ -45,49 +49,27 @@ connectToHostname hostname = do
           SockAddrInet6 _ _ _ _ -> socket AF_INET6 Stream defaultProtocol
       connect socket address
       readBufferMVar <- newMVar BS.empty
-      let stream = AbstractStream {
-                         streamSend = sendAll socket,
-                         streamRecv = recv socket,
-                         streamClose = sClose socket,
-                         streamReadBuffer = readBufferMVar
+      let socketStream = SocketStream {
+                               socketStreamSocket = socket,
+                               socketStreamReadBuffer = readBufferMVar
+                             }
+          stream = AbstractStream {
+                         streamSend = socketStreamSend socketStream,
+                         streamRead = socketStreamRead socketStream,
+                         streamClose = socketStreamClose socketStream
                        }
       return stream
 
 
-streamRecvCRLF :: AbstractStream -> IO (Maybe ByteString)
-streamRecvCRLF stream = do
-  readBuffer <- takeMVar $ streamReadBuffer stream
-  (readBuffer, atEOF) <- moreBufferIfNull stream readBuffer
-  loop readBuffer atEOF
-  where loop :: ByteString -> Bool -> IO (Maybe ByteString)
-        loop readBuffer atEOF = do
-          let (before, after) = BS.breakSubstring (UTF8.fromString "\n")
-                                                  readBuffer
-          if BS.null after
-            then do
-              let readBuffer = before
-              if atEOF
-                then do
-                  putMVar (streamReadBuffer stream) readBuffer
-                  return Nothing
-                else do
-                  (readBuffer, atEOF) <- moreBuffer stream readBuffer
-                  loop readBuffer atEOF
-            else do
-              let (result, readBuffer) = (before, BS.drop 2 after)
-              putMVar (streamReadBuffer stream) readBuffer
-              if BS.null result
-                then return $ Just result
-                else if BS.last result == (fromIntegral $ ord '\r')
-                       then return $ Just
-                                      $ BS.take (BS.length result - 1) result
-                       else return $ Just result
+socketStreamSend :: SocketStream -> ByteString -> IO ()
+socketStreamSend socketStream bytestring = do
+  sendAll (socketStreamSocket socketStream) bytestring
 
 
-streamRecvByteString :: AbstractStream -> Int -> IO (Maybe ByteString)
-streamRecvByteString stream desiredLength = do
-  readBuffer <- takeMVar $ streamReadBuffer stream
-  (readBuffer, atEOF) <- moreBufferIfNull stream readBuffer
+socketStreamRead :: SocketStream -> Int -> IO (Maybe ByteString)
+socketStreamRead socketStream desiredLength = do
+  readBuffer <- takeMVar $ socketStreamReadBuffer socketStream
+  (readBuffer, atEOF) <- moreBufferIfNull readBuffer
   loop readBuffer atEOF
   where loop :: ByteString -> Bool -> IO (Maybe ByteString)
         loop readBuffer atEOF = do
@@ -95,21 +77,54 @@ streamRecvByteString stream desiredLength = do
             then do
               if atEOF
                 then do
-                  putMVar (streamReadBuffer stream) readBuffer
+                  putMVar (socketStreamReadBuffer socketStream) BS.empty
                   return Nothing
                 else do
-                  (readBuffer, atEOF) <- moreBuffer stream readBuffer
+                  (readBuffer, atEOF) <- moreBuffer readBuffer
                   loop readBuffer atEOF
             else do
               (result, readBuffer)
                 <- return $ BS.splitAt desiredLength readBuffer
-              putMVar (streamReadBuffer stream) readBuffer
+              putMVar (socketStreamReadBuffer socketStream) readBuffer
               return $ Just result
+        moreBufferIfNull :: ByteString -> IO (ByteString, Bool)
+        moreBufferIfNull readBuffer = do
+          if BS.null readBuffer
+            then moreBuffer readBuffer
+            else return (readBuffer, False)
+        moreBuffer :: ByteString -> IO (ByteString, Bool)
+        moreBuffer readBuffer = do
+          newData <- recv (socketStreamSocket socketStream) 4096
+          if BS.null newData
+            then return (readBuffer, True)
+            else return (BS.concat [readBuffer, newData], False)
 
 
-streamRecvWord32 :: AbstractStream -> IO (Maybe Word32)
-streamRecvWord32 stream = do
-  maybeBytestring <- streamRecvByteString stream 4
+  
+
+socketStreamClose :: SocketStream -> IO ()
+socketStreamClose socketStream = do
+  sClose $ socketStreamSocket socketStream
+
+
+streamReadCRLF :: AbstractStream -> IO (Maybe ByteString)
+streamReadCRLF stream = do
+  loop BS.empty
+  where loop result = do
+          maybeByte <- streamRead stream 1
+          case maybeByte of
+            Nothing -> return Nothing
+            Just byte | byte == UTF8.fromString "\n" -> 
+                         if BS.null result
+                           then return $ Just result
+                           else return $ Just
+                                  $ BS.take (BS.length result - 1) result
+                      | otherwise -> loop $ BS.append result byte
+
+
+streamReadWord32 :: AbstractStream -> IO (Maybe Word32)
+streamReadWord32 stream = do
+  maybeBytestring <- streamRead stream 4
   return $ fmap (\bytestring ->
                    let [a1, a2, a3, a4] = BS.unpack bytestring
                    in shiftL (fromIntegral a1) 24
@@ -119,25 +134,10 @@ streamRecvWord32 stream = do
                 maybeBytestring
 
 
-streamRecvWord8 :: AbstractStream -> IO (Maybe Word8)
-streamRecvWord8 stream = do
-  maybeBytestring <- streamRecvByteString stream 1
+streamReadWord8 :: AbstractStream -> IO (Maybe Word8)
+streamReadWord8 stream = do
+  maybeBytestring <- streamRead stream 1
   return $ fmap (\bytestring ->
                    let [a1] = BS.unpack bytestring
                    in shiftL (fromIntegral a1) 0)
                 maybeBytestring
-
-
-moreBufferIfNull :: AbstractStream -> ByteString -> IO (ByteString, Bool)
-moreBufferIfNull stream readBuffer = do
-  if BS.null readBuffer
-    then moreBuffer stream readBuffer
-    else return (readBuffer, False)
-
-
-moreBuffer :: AbstractStream -> ByteString -> IO (ByteString, Bool)
-moreBuffer stream readBuffer = do
-  newData <- streamRecv stream 4096
-  if BS.null newData
-    then return (readBuffer, True)
-    else return (BS.concat [readBuffer, newData], False)

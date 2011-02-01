@@ -25,12 +25,13 @@ usage = do
 
 sshClient :: String -> IO ()
 sshClient hostname = do
+  putStrLn $ "Connecting..."
   stream <- connectToHostname hostname
   putStrLn $ "Initiating session..."
   streamSend stream $ UTF8.fromString "SSH-2.0-directssh1.0\r\n"
   let loopForIdentification :: IO (Maybe ByteString)
       loopForIdentification = do
-        maybeIdentificationOrMOTD <- streamRecvCRLF stream
+        maybeIdentificationOrMOTD <- streamReadCRLF stream
         case maybeIdentificationOrMOTD of
           Nothing -> return Nothing
           Just identificationOrMOTD ->
@@ -42,7 +43,8 @@ sshClient hostname = do
     Nothing -> error "SSH identification string not received."
     Just identification -> do
       stream <- startSSH stream
-      streamRead
+      keyExchangeMessage <- streamReadSSHMessage stream
+      putStrLn $ show keyExchangeMessage
       putStrLn $ "Connected."
       putStrLn $ "Disconnecting."
       streamClose stream
