@@ -40,11 +40,19 @@ sshClient hostname = do
   stream <- connectToHostname hostname
   putStrLn $ "Initiating session..."
   streamSend stream $ UTF8.fromString "SSH-2.0-directssh1.0\r\n"
-  maybeIdentification <- streamRecvCRLF stream
+  let loopForIdentification :: IO (Maybe ByteString)
+      loopForIdentification = do
+        maybeIdentificationOrMOTD <- streamRecvCRLF stream
+        case maybeIdentificationOrMOTD of
+          Nothing -> return Nothing
+          Just identificationOrMOTD ->
+            if BS.isPrefixOf (UTF8.fromString "SSH-") identificationOrMOTD
+              then return $ Just identificationOrMOTD
+              else loopForIdentification
+  maybeIdentification <- loopForIdentification
   case maybeIdentification of
     Nothing -> error "SSH identification string not received."
     Just identification -> do
-      putStrLn $ UTF8.toString identification
       putStrLn $ "Connected."
   putStrLn $ "Disconnecting."
   streamClose stream
