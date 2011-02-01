@@ -68,38 +68,39 @@ socketStreamSend socketStream bytestring = do
 
 socketStreamRead :: SocketStream -> Int -> IO (Maybe ByteString)
 socketStreamRead socketStream desiredLength = do
-  readBuffer <- takeMVar $ socketStreamReadBuffer socketStream
-  (readBuffer, atEOF) <- moreBufferIfNull readBuffer
-  loop readBuffer atEOF
-  where loop :: ByteString -> Bool -> IO (Maybe ByteString)
-        loop readBuffer atEOF = do
-          if BS.length readBuffer < desiredLength
-            then do
-              if atEOF
+  if desiredLength == 0
+    then return $ Just BS.empty
+    else do
+      readBuffer <- takeMVar $ socketStreamReadBuffer socketStream
+      (readBuffer, atEOF) <- moreBufferIfNull readBuffer
+      loop readBuffer atEOF
+      where loop :: ByteString -> Bool -> IO (Maybe ByteString)
+            loop readBuffer atEOF = do
+              if BS.length readBuffer < desiredLength
                 then do
-                  putMVar (socketStreamReadBuffer socketStream) BS.empty
-                  return Nothing
+                  if atEOF
+                    then do
+                      putMVar (socketStreamReadBuffer socketStream) BS.empty
+                      return Nothing
+                    else do
+                      (readBuffer, atEOF) <- moreBuffer readBuffer
+                      loop readBuffer atEOF
                 else do
-                  (readBuffer, atEOF) <- moreBuffer readBuffer
-                  loop readBuffer atEOF
-            else do
-              (result, readBuffer)
-                <- return $ BS.splitAt desiredLength readBuffer
-              putMVar (socketStreamReadBuffer socketStream) readBuffer
-              return $ Just result
-        moreBufferIfNull :: ByteString -> IO (ByteString, Bool)
-        moreBufferIfNull readBuffer = do
-          if BS.null readBuffer
-            then moreBuffer readBuffer
-            else return (readBuffer, False)
-        moreBuffer :: ByteString -> IO (ByteString, Bool)
-        moreBuffer readBuffer = do
-          newData <- recv (socketStreamSocket socketStream) 4096
-          if BS.null newData
-            then return (readBuffer, True)
-            else return (BS.concat [readBuffer, newData], False)
-
-
+                  (result, readBuffer)
+                    <- return $ BS.splitAt desiredLength readBuffer
+                  putMVar (socketStreamReadBuffer socketStream) readBuffer
+                  return $ Just result
+            moreBufferIfNull :: ByteString -> IO (ByteString, Bool)
+            moreBufferIfNull readBuffer = do
+              if BS.null readBuffer
+                then moreBuffer readBuffer
+                else return (readBuffer, False)
+            moreBuffer :: ByteString -> IO (ByteString, Bool)
+            moreBuffer readBuffer = do
+              newData <- recv (socketStreamSocket socketStream) 4096
+              if BS.null newData
+                then return (readBuffer, True)
+                else return (BS.concat [readBuffer, newData], False)
   
 
 socketStreamClose :: SocketStream -> IO ()

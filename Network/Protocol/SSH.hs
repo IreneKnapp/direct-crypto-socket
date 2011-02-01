@@ -19,10 +19,11 @@ import qualified Network.Protocol.SSH.MAC as MAC
 data SSHStream = SSHStream {
     sshStreamUnderlyingStream :: AbstractStream,
     sshStreamOpen :: MVar Bool,
+    sshStreamReadBuffer :: MVar ByteString,
     sshStreamSendMACAlgorithm :: MVar MAC.Algorithm,
     sshStreamSendSequenceNumber :: MVar Word32,
-    sshStreamRecvMACAlgorithm :: MVar MAC.Algorithm,
-    sshStreamRecvSequenceNumber :: MVar Word32
+    sshStreamReadMACAlgorithm :: MVar MAC.Algorithm,
+    sshStreamReadSequenceNumber :: MVar Word32
   }
 
 
@@ -47,6 +48,7 @@ data SSHMessage
 startSSH :: AbstractStream -> IO AbstractStream
 startSSH underlyingStream = do
   openMVar <- newMVar True
+  readBufferMVar <- newMVar BS.empty
   sendSequenceNumberMVar <- newMVar 0
   sendMACAlgorithmMVar <- newMVar MAC.None
   recvSequenceNumberMVar <- newMVar 0
@@ -54,10 +56,11 @@ startSSH underlyingStream = do
   let sshStream = SSHStream {
                     sshStreamUnderlyingStream = underlyingStream,
                     sshStreamOpen = openMVar,
+                    sshStreamReadBuffer = readBufferMVar,
                     sshStreamSendSequenceNumber = sendSequenceNumberMVar,
                     sshStreamSendMACAlgorithm = sendMACAlgorithmMVar,
-                    sshStreamRecvSequenceNumber = recvSequenceNumberMVar,
-                    sshStreamRecvMACAlgorithm = recvMACAlgorithmMVar
+                    sshStreamReadSequenceNumber = recvSequenceNumberMVar,
+                    sshStreamReadMACAlgorithm = recvMACAlgorithmMVar
                   }
   return $ AbstractStream {
              streamSend = sshStreamSend sshStream,
@@ -78,15 +81,52 @@ sshStreamSend sshStream bytestring = do
 
 
 sshStreamRead :: SSHStream -> Int -> IO (Maybe ByteString)
-sshStreamRead sshStream count = do
+sshStreamRead sshStream desiredLength = do
+  if desiredLength == 0
+    then return $ Just BS.empty
+    else do
+      readBuffer <- takeMVar $ sshStreamReadBuffer sshStream
+      (readBuffer, atEOF) <- moreBufferIfNull readBuffer
+      loop readBuffer atEOF
+      where loop :: ByteString -> Bool -> IO (Maybe ByteString)
+            loop readBuffer atEOF = do
+              if BS.length readBuffer < desiredLength
+                then do
+                  if atEOF
+                    then do
+                      putMVar (sshStreamReadBuffer sshStream) BS.empty
+                      return Nothing
+                    else do
+                      (readBuffer, atEOF) <- moreBuffer readBuffer
+                      loop readBuffer atEOF
+                else do
+                  (result, readBuffer)
+                    <- return $ BS.splitAt desiredLength readBuffer
+                  putMVar (sshStreamReadBuffer sshStream) readBuffer
+                  return $ Just result
+            moreBufferIfNull :: ByteString -> IO (ByteString, Bool)
+            moreBufferIfNull readBuffer = do
+              if BS.null readBuffer
+                then moreBuffer readBuffer
+                else return (readBuffer, False)
+            moreBuffer :: ByteString -> IO (ByteString, Bool)
+            moreBuffer readBuffer = do
+              maybeNewData <- sshStreamReadPacket sshStream
+              case maybeNewData of
+                Nothing -> return (readBuffer, True)
+                Just newData -> return (BS.concat [readBuffer, newData], False)
+
+
+sshStreamReadPacket :: SSHStream -> IO (Maybe ByteString)
+sshStreamReadPacket sshStream = do
   isOpen <- readMVar $ sshStreamOpen sshStream
   if not isOpen
     then error "SSH stream already closed."
     else return ()
   let stream = sshStreamUnderlyingStream sshStream
-  macAlgorithm <- readMVar $ sshStreamRecvMACAlgorithm sshStream
-  sequenceNumber <- takeMVar $ sshStreamRecvSequenceNumber sshStream
-  putMVar (sshStreamRecvSequenceNumber sshStream) $ sequenceNumber + 1
+  macAlgorithm <- readMVar $ sshStreamReadMACAlgorithm sshStream
+  sequenceNumber <- takeMVar $ sshStreamReadSequenceNumber sshStream
+  putMVar (sshStreamReadSequenceNumber sshStream) $ sequenceNumber + 1
   maybePacketLength <- streamReadWord32 stream
   case maybePacketLength of
     Nothing -> return Nothing
