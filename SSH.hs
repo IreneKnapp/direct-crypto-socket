@@ -41,6 +41,8 @@ sshClient hostname = do
   case maybeIdentification of
     Nothing -> error "SSH identification string not received."
     Just identification -> do
+      stream <- startSSH stream
+      streamRead
       putStrLn $ "Connected."
-  putStrLn $ "Disconnecting."
-  streamClose stream
+      putStrLn $ "Disconnecting."
+      streamClose stream
