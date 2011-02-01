@@ -48,10 +48,7 @@ sshClient hostname = do
   case maybeIdentification of
     Nothing -> error "SSH identification string not received."
     Just identification -> do
-      stream <- startSSH stream
-      let sshTransportState = SSHTransportState {
-                                sshStateUserAuthenticationMode = Nothing
-                              }
+      (stream, transportState) <- startSSH stream
       cookie <- generateCookie
       streamSendSSHMessage stream
        $ SSHMessageKeyExchangeInit {
@@ -76,11 +73,14 @@ sshClient hostname = do
                              sshMessageLanguagesServerToClient = [],
                              sshMessageFirstKeyExchangePacketFollows = False
                            }
-      keyExchangeMessage <- streamReadSSHMessage stream sshTransportState
-      putStrLn $ show keyExchangeMessage
-      putStrLn $ "Connected."
-      putStrLn $ "Disconnecting."
-      streamClose stream
+      maybeResult <- streamReadSSHMessage stream transportState
+      case maybeResult of
+        Nothing -> error "Unexpectedly disconnected."
+        Just (keyExchangeMessage, transportState) -> do
+          putStrLn $ show keyExchangeMessage
+          putStrLn $ "Connected."
+          putStrLn $ "Disconnecting."
+          streamClose stream
 
 
 generateCookie :: IO ByteString

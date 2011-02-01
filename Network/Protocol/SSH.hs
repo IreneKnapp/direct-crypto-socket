@@ -17,9 +17,10 @@ import Data.Maybe
 import Data.Word
 
 import Internal.AbstractStreams
-import Network.Protocol.SSH.Authentication
-import Network.Protocol.SSH.Channels
-import Network.Protocol.SSH.Global
+import qualified Network.Protocol.SSH.Authentication as Authentication
+import qualified Network.Protocol.SSH.Channels as Channels
+import qualified Network.Protocol.SSH.Global as Global
+import Network.Protocol.SSH.Internal
 import qualified Network.Protocol.SSH.MAC as MAC
 
 
@@ -35,7 +36,8 @@ data SSHStream = SSHStream {
 
 
 data SSHTransportState = SSHTransportState {
-    sshStateUserAuthenticationMode :: Maybe SSHUserAuthenticationMode
+    sshTransportStateUserAuthenticationMode :: Maybe SSHUserAuthenticationMode,
+    sshTransportStateGlobalRequestsPending :: [SSHMessage]
   }
 
 
@@ -87,7 +89,7 @@ data SSHMessage
       sshMessageUserName :: String,
       sshMessageServiceName :: String,
       sshMessageMethodName :: String,
-      sshMessageMethodFields :: AuthenticationRequest
+      sshMessageMethodFields :: Authentication.AuthenticationRequest
     }
   | SSHMessageUserAuthenticationFailure {
       sshMessageAuthenticationMethods :: [String],
@@ -110,10 +112,10 @@ data SSHMessage
   | SSHMessageGlobalRequest {
       sshMessageRequestName :: String,
       sshMessageWantReply :: Bool,
-      sshMessageRequestFields :: GlobalRequest
+      sshMessageRequestFields :: Global.GlobalRequest
     }
   | SSHMessageRequestSuccess {
-      sshMessageResponseFields :: GlobalResponse
+      sshMessageResponseFields :: Global.GlobalResponse
     }
   | SSHMessageRequestFailure {
     }
@@ -122,14 +124,15 @@ data SSHMessage
       sshMessageSenderChannel :: Word32,
       sshMessageInitialWindowSize :: Word32,
       sshMessageMaximumPacketSize :: Word32,
-      sshMessageChannelOpenFields :: ChannelOpen
+      sshMessageChannelOpenFields :: Channels.ChannelOpen
     }
   | SSHMessageChannelOpenConfirmation {
       sshMessageRecipientChannel :: Word32,
       sshMessageSenderChannel :: Word32,
       sshMessageInitialWindowSize :: Word32,
       sshMessageMaximumPacketSize :: Word32,
-      sshMessageChannelOpenConfirmationFields :: ChannelOpenConfirmation
+      sshMessageChannelOpenConfirmationFields
+        :: Channels.ChannelOpenConfirmation
     }
   | SSHMessageChannelOpenFailure {
       sshMessageRecipientChannel :: Word32,
@@ -160,7 +163,7 @@ data SSHMessage
       sshMessageRecipientChannel :: Word32,
       sshMessageRequestType :: String,
       sshMessageWantReply :: Bool,
-      sshMessageChannelRequestFields :: ChannelRequest
+      sshMessageChannelRequestFields :: Channels.ChannelRequest
     }
   | SSHMessageChannelSuccess {
       sshMessageRecipientChannel :: Word32
@@ -171,7 +174,7 @@ data SSHMessage
   deriving (Show)
 
 
-startSSH :: AbstractStream -> IO AbstractStream
+startSSH :: AbstractStream -> IO (AbstractStream, SSHTransportState)
 startSSH underlyingStream = do
   openMVar <- newMVar True
   readBufferMVar <- newMVar BS.empty
@@ -188,11 +191,18 @@ startSSH underlyingStream = do
                     sshStreamReadSequenceNumber = recvSequenceNumberMVar,
                     sshStreamReadMACAlgorithm = recvMACAlgorithmMVar
                   }
-  return $ AbstractStream {
-             streamSend = sshStreamSend sshStream,
-             streamRead = sshStreamRead sshStream,
-             streamClose = sshStreamClose sshStream
-           }
+      stream = AbstractStream {
+                 streamSend = sshStreamSend sshStream,
+                 streamRead = sshStreamRead sshStream,
+                 streamClose = sshStreamClose sshStream
+               }
+      transportState = SSHTransportState {
+                          sshTransportStateUserAuthenticationMode
+                            = Nothing,
+                          sshTransportStateGlobalRequestsPending
+                            = []
+                       }
+  return (stream, transportState)
 
 
 sshStreamSend :: SSHStream -> ByteString -> IO ()
@@ -340,7 +350,7 @@ streamSendSSHMessage stream message = do
 
 streamReadSSHMessage :: AbstractStream
                      -> SSHTransportState
-                     -> IO (Maybe SSHMessage)
+                     -> IO (Maybe (SSHMessage, SSHTransportState))
 streamReadSSHMessage stream transportState = do
   maybeMessageType <- streamReadWord8 stream
   case maybeMessageType of
@@ -353,34 +363,37 @@ streamReadSSHMessage stream transportState = do
         Nothing -> return Nothing
         Just _ ->
           return $ Just
-                 SSHMessageDisconnect {
-                     sshMessageReasonCode
-                       = fromJust maybeReasonCode,
-                     sshMessageDescription
-                       = fromJust maybeDescription,
-                     sshMessageLanguageTag
-                       = fromJust maybeLanguageTag
-                   }
+                 (SSHMessageDisconnect {
+                      sshMessageReasonCode
+                        = fromJust maybeReasonCode,
+                      sshMessageDescription
+                        = fromJust maybeDescription,
+                      sshMessageLanguageTag
+                        = fromJust maybeLanguageTag
+                    },
+                  transportState)
     Just 2 -> do
       maybeMessageData <- streamReadBinaryString stream
       case maybeMessageData of
         Nothing -> return Nothing
         Just _ ->
           return $ Just
-                 SSHMessageIgnore {
-                     sshMessageData
-                       = fromJust maybeMessageData
-                   }
+                 (SSHMessageIgnore {
+                      sshMessageData
+                        = fromJust maybeMessageData
+                    },
+                  transportState)
     Just 3 -> do
       maybePacketSequenceNumber <- streamReadWord32 stream
       case maybePacketSequenceNumber of
         Nothing -> return Nothing
         Just _ ->
           return $ Just
-                 SSHMessageUnimplemented {
-                     sshMessagePacketSequenceNumber
-                       = fromJust maybePacketSequenceNumber
-                   }
+                 (SSHMessageUnimplemented {
+                      sshMessagePacketSequenceNumber
+                        = fromJust maybePacketSequenceNumber
+                    },
+                  transportState)
     Just 4 -> do
       maybeAlwaysDisplay <- streamReadBoolean stream
       maybeText <- streamReadString stream
@@ -389,34 +402,37 @@ streamReadSSHMessage stream transportState = do
         Nothing -> return Nothing
         Just _ ->
           return $ Just
-                 SSHMessageDebug {
-                     sshMessageAlwaysDisplay
-                       = fromJust maybeAlwaysDisplay,
-                     sshMessageText
-                       = fromJust maybeText,
-                     sshMessageLanguageTag
-                       = fromJust maybeLanguageTag
-                   }
+                 (SSHMessageDebug {
+                      sshMessageAlwaysDisplay
+                        = fromJust maybeAlwaysDisplay,
+                      sshMessageText
+                        = fromJust maybeText,
+                      sshMessageLanguageTag
+                        = fromJust maybeLanguageTag
+                    },
+                  transportState)
     Just 5 -> do
       maybeServiceName <- streamReadString stream
       case maybeServiceName of
         Nothing -> return Nothing
         Just _ ->
           return $ Just
-                 SSHMessageServiceRequest {
-                     sshMessageServiceName
-                       = fromJust maybeServiceName
-                   }
+                 (SSHMessageServiceRequest {
+                      sshMessageServiceName
+                        = fromJust maybeServiceName
+                    },
+                  transportState)
     Just 6 -> do
       maybeServiceName <- streamReadString stream
       case maybeServiceName of
         Nothing -> return Nothing
         Just _ ->
           return $ Just
-                 SSHMessageServiceAccept {
-                     sshMessageServiceName
-                       = fromJust maybeServiceName
-                   }
+                 (SSHMessageServiceAccept {
+                      sshMessageServiceName
+                        = fromJust maybeServiceName
+                    },
+                  transportState)
     Just 20 -> do
       maybeCookie <- streamRead stream 16
       maybeKeyExchangeAlgorithms <- streamReadNameList stream
@@ -435,53 +451,59 @@ streamReadSSHMessage stream transportState = do
         Nothing -> return Nothing
         Just _ -> 
           return $ Just
-                 SSHMessageKeyExchangeInit {
-                     sshMessageCookie
-                       = fromJust maybeCookie,
-                     sshMessageKeyExchangeAlgorithms
-                       = fromJust maybeKeyExchangeAlgorithms,
-                     sshMessageServerHostKeyAlgorithms
-                       = fromJust maybeServerHostKeyAlgorithms,
-                     sshMessageEncryptionAlgorithmsClientToServer
-                       = fromJust maybeEncryptionAlgorithmsClientToServer,
-                     sshMessageEncryptionAlgorithmsServerToClient
-                       = fromJust maybeEncryptionAlgorithmsServerToClient,
-                     sshMessageMACAlgorithmsClientToServer
-                       = fromJust maybeMACAlgorithmsClientToServer,
-                     sshMessageMACAlgorithmsServerToClient
-                       = fromJust maybeMACAlgorithmsServerToClient,
-                     sshMessageCompressionAlgorithmsClientToServer
-                       = fromJust maybeCompressionAlgorithmsClientToServer,
-                     sshMessageCompressionAlgorithmsServerToClient
-                       = fromJust maybeCompressionAlgorithmsServerToClient,
-                     sshMessageLanguagesClientToServer
-                       = fromJust maybeLanguagesClientToServer,
-                     sshMessageLanguagesServerToClient
-                       = fromJust maybeLanguagesServerToClient,
-                     sshMessageFirstKeyExchangePacketFollows
-                       = fromJust maybeFirstKeyExchangePacketFollows
-                   }
+                 (SSHMessageKeyExchangeInit {
+                      sshMessageCookie
+                        = fromJust maybeCookie,
+                      sshMessageKeyExchangeAlgorithms
+                        = fromJust maybeKeyExchangeAlgorithms,
+                      sshMessageServerHostKeyAlgorithms
+                        = fromJust maybeServerHostKeyAlgorithms,
+                      sshMessageEncryptionAlgorithmsClientToServer
+                        = fromJust maybeEncryptionAlgorithmsClientToServer,
+                      sshMessageEncryptionAlgorithmsServerToClient
+                        = fromJust maybeEncryptionAlgorithmsServerToClient,
+                      sshMessageMACAlgorithmsClientToServer
+                        = fromJust maybeMACAlgorithmsClientToServer,
+                      sshMessageMACAlgorithmsServerToClient
+                        = fromJust maybeMACAlgorithmsServerToClient,
+                      sshMessageCompressionAlgorithmsClientToServer
+                        = fromJust maybeCompressionAlgorithmsClientToServer,
+                      sshMessageCompressionAlgorithmsServerToClient
+                        = fromJust maybeCompressionAlgorithmsServerToClient,
+                      sshMessageLanguagesClientToServer
+                        = fromJust maybeLanguagesClientToServer,
+                      sshMessageLanguagesServerToClient
+                        = fromJust maybeLanguagesServerToClient,
+                      sshMessageFirstKeyExchangePacketFollows
+                        = fromJust maybeFirstKeyExchangePacketFollows
+                    },
+                  transportState)
     Just 21 -> do
-      return $ Just $ SSHMessageNewKeys { }
+      return $ Just (SSHMessageNewKeys { }, transportState)
     Just 50 -> do
       maybeUserName <- streamReadString stream
       maybeServiceName <- streamReadString stream
       maybeMethodName <- streamReadString stream
-      maybeMethodFields <- return $ Just undefined -- TODO
+      maybeMethodFields
+        <- case maybeMethodName of
+             Nothing -> return Nothing
+             Just methodName ->
+               Authentication.streamReadMethodFields stream methodName
       case maybeMethodFields of
         Nothing -> return Nothing
         Just _ ->
           return $ Just
-                 SSHMessageUserAuthenticationRequest {
-                     sshMessageUserName
-                       = fromJust maybeUserName,
-                     sshMessageServiceName
-                       = fromJust maybeServiceName,
-                     sshMessageMethodName
-                       = fromJust maybeMethodName,
-                     sshMessageMethodFields
-                       = fromJust maybeMethodFields
-                   }
+                 (SSHMessageUserAuthenticationRequest {
+                      sshMessageUserName
+                        = fromJust maybeUserName,
+                      sshMessageServiceName
+                        = fromJust maybeServiceName,
+                      sshMessageMethodName
+                        = fromJust maybeMethodName,
+                      sshMessageMethodFields
+                        = fromJust maybeMethodFields
+                    },
+                  transportState)
     Just 51 -> do
       maybeAuthenticationMethods <- streamReadNameList stream
       maybePartialSuccess <- streamReadBoolean stream
@@ -489,14 +511,15 @@ streamReadSSHMessage stream transportState = do
         Nothing -> return Nothing
         Just _ ->
           return $ Just
-                 SSHMessageUserAuthenticationFailure {
-                     sshMessageAuthenticationMethods
-                       = fromJust maybeAuthenticationMethods,
-                     sshMessagePartialSuccess
-                       = fromJust maybePartialSuccess
-                   }
+                 (SSHMessageUserAuthenticationFailure {
+                      sshMessageAuthenticationMethods
+                        = fromJust maybeAuthenticationMethods,
+                      sshMessagePartialSuccess
+                        = fromJust maybePartialSuccess
+                    },
+                  transportState)
     Just 52 -> do
-      return $ Just $ SSHMessageUserAuthenticationSuccess { }
+      return $ Just (SSHMessageUserAuthenticationSuccess { }, transportState)
     Just 53 -> do
       maybeText <- streamReadString stream
       maybeLanguageTag <- streamReadString stream
@@ -504,14 +527,15 @@ streamReadSSHMessage stream transportState = do
         Nothing -> return Nothing
         Just _ ->
           return $ Just
-                 SSHMessageUserAuthenticationBanner {
-                     sshMessageText
-                       = fromJust maybeText,
-                     sshMessageLanguageTag
-                       = fromJust maybeLanguageTag
-                   }
+                 (SSHMessageUserAuthenticationBanner {
+                      sshMessageText
+                        = fromJust maybeText,
+                      sshMessageLanguageTag
+                        = fromJust maybeLanguageTag
+                    },
+                  transportState)
     Just 60 -> do
-      case sshStateUserAuthenticationMode transportState of
+      case sshTransportStateUserAuthenticationMode transportState of
         Nothing -> error $ "User-authentication SSH message received when "
                            ++ "transport not in appropriate state."
         Just SSHUserAuthenticationModePublicKey -> do
@@ -521,12 +545,13 @@ streamReadSSHMessage stream transportState = do
             Nothing -> return Nothing
             Just _ -> do
               return $ Just
-                     SSHMessageUserAuthenticationPublicKeyOkay {
-                         sshMessageAlgorithmName
-                           = fromJust maybeAlgorithmName,
-                         sshMessageBlob
-                           = fromJust maybeBlob
-                       }
+                     (SSHMessageUserAuthenticationPublicKeyOkay {
+                          sshMessageAlgorithmName
+                            = fromJust maybeAlgorithmName,
+                          sshMessageBlob
+                            = fromJust maybeBlob
+                        },
+                      transportState)
         Just SSHUserAuthenticationModePassword -> do
           maybeText <- streamReadString stream
           maybeLanguageTag <- streamReadString stream
@@ -534,12 +559,13 @@ streamReadSSHMessage stream transportState = do
             Nothing -> return Nothing
             Just _ -> do
               return $ Just
-                     SSHMessageUserAuthenticationPasswordChangeRequest {
-                         sshMessageText
-                           = fromJust maybeText,
-                         sshMessageLanguageTag
-                           = fromJust maybeLanguageTag
-                       }
+                     (SSHMessageUserAuthenticationPasswordChangeRequest {
+                          sshMessageText
+                            = fromJust maybeText,
+                          sshMessageLanguageTag
+                            = fromJust maybeLanguageTag
+                        },
+                      transportState)
     Just 80 -> do
       maybeRequestName <- streamReadString stream
       maybeWantReply <- streamReadBoolean stream
@@ -547,25 +573,27 @@ streamReadSSHMessage stream transportState = do
       case maybeRequestFields of
         Nothing -> return Nothing
         Just _ -> return $ Just
-                         SSHMessageGlobalRequest {
-                             sshMessageRequestName
-                               = fromJust maybeRequestName,
-                             sshMessageWantReply
-                               = fromJust maybeWantReply,
-                             sshMessageRequestFields
-                               = fromJust maybeRequestFields
-                           }
+                         (SSHMessageGlobalRequest {
+                              sshMessageRequestName
+                                = fromJust maybeRequestName,
+                              sshMessageWantReply
+                                = fromJust maybeWantReply,
+                              sshMessageRequestFields
+                                = fromJust maybeRequestFields
+                            },
+                          transportState)
     Just 81 -> do
       maybeResponseFields <- return $ Just undefined -- TODO
       case maybeResponseFields of
         Nothing -> return Nothing
         Just _ -> return $ Just
-                         SSHMessageRequestSuccess {
-                             sshMessageResponseFields
-                               = fromJust maybeResponseFields
-                           }
+                         (SSHMessageRequestSuccess {
+                              sshMessageResponseFields
+                                = fromJust maybeResponseFields
+                            },
+                          transportState)
     Just 82 -> do
-      return $ Just SSHMessageRequestFailure { }
+      return $ Just (SSHMessageRequestFailure { }, transportState)
     Just 90 -> do
       maybeChannelType <- streamReadString stream
       maybeSenderChannel <- streamReadWord32 stream
@@ -575,18 +603,19 @@ streamReadSSHMessage stream transportState = do
       case maybeChannelOpenFields of
         Nothing -> return Nothing
         Just _ -> return $ Just
-                         SSHMessageChannelOpen {
-                             sshMessageChannelType
-                               = fromJust maybeChannelType,
-                             sshMessageSenderChannel
-                               = fromJust maybeSenderChannel,
-                             sshMessageInitialWindowSize
-                               = fromJust maybeInitialWindowSize,
-                             sshMessageMaximumPacketSize
-                               = fromJust maybeMaximumPacketSize,
-                             sshMessageChannelOpenFields
-                               = fromJust maybeChannelOpenFields
-                           }
+                         (SSHMessageChannelOpen {
+                              sshMessageChannelType
+                                = fromJust maybeChannelType,
+                              sshMessageSenderChannel
+                                = fromJust maybeSenderChannel,
+                              sshMessageInitialWindowSize
+                                = fromJust maybeInitialWindowSize,
+                              sshMessageMaximumPacketSize
+                                = fromJust maybeMaximumPacketSize,
+                              sshMessageChannelOpenFields
+                                = fromJust maybeChannelOpenFields
+                            },
+                          transportState)
     Just 91 -> do
       maybeRecipientChannel <- streamReadWord32 stream
       maybeSenderChannel <- streamReadWord32 stream
@@ -596,18 +625,19 @@ streamReadSSHMessage stream transportState = do
       case maybeChannelOpenConfirmationFields of
         Nothing -> return Nothing
         Just _ -> return $ Just
-                         SSHMessageChannelOpenConfirmation {
-                             sshMessageRecipientChannel
-                               = fromJust maybeRecipientChannel,
-                             sshMessageSenderChannel
-                               = fromJust maybeSenderChannel,
-                             sshMessageInitialWindowSize
-                               = fromJust maybeInitialWindowSize,
-                             sshMessageMaximumPacketSize
-                               = fromJust maybeMaximumPacketSize,
-                             sshMessageChannelOpenConfirmationFields
-                               = fromJust maybeChannelOpenConfirmationFields
-                           }
+                         (SSHMessageChannelOpenConfirmation {
+                              sshMessageRecipientChannel
+                                = fromJust maybeRecipientChannel,
+                              sshMessageSenderChannel
+                                = fromJust maybeSenderChannel,
+                              sshMessageInitialWindowSize
+                                = fromJust maybeInitialWindowSize,
+                              sshMessageMaximumPacketSize
+                                = fromJust maybeMaximumPacketSize,
+                              sshMessageChannelOpenConfirmationFields
+                                = fromJust maybeChannelOpenConfirmationFields
+                            },
+                          transportState)
     Just 92 -> do
       maybeRecipientChannel <- streamReadWord32 stream
       maybeReasonCode <- streamReadWord32 stream
@@ -616,40 +646,43 @@ streamReadSSHMessage stream transportState = do
       case maybeLanguageTag of
         Nothing -> return Nothing
         Just _ -> return $ Just
-                         SSHMessageChannelOpenFailure {
-                             sshMessageRecipientChannel
-                               = fromJust maybeRecipientChannel,
-                             sshMessageReasonCode
-                               = fromJust maybeReasonCode,
-                             sshMessageDescription
-                               = fromJust maybeDescription,
-                             sshMessageLanguageTag
-                               = fromJust maybeLanguageTag
-                           }
+                         (SSHMessageChannelOpenFailure {
+                              sshMessageRecipientChannel
+                                = fromJust maybeRecipientChannel,
+                              sshMessageReasonCode
+                                = fromJust maybeReasonCode,
+                              sshMessageDescription
+                                = fromJust maybeDescription,
+                              sshMessageLanguageTag
+                                = fromJust maybeLanguageTag
+                            },
+                          transportState)
     Just 93 -> do
       maybeRecipientChannel <- streamReadWord32 stream
       maybeBytesToAdd <- streamReadWord32 stream
       case maybeBytesToAdd of
         Nothing -> return Nothing
         Just _ -> return $ Just
-                         SSHMessageChannelWindowAdjust {
-                             sshMessageRecipientChannel
-                               = fromJust maybeRecipientChannel,
-                             sshMessageBytesToAdd
-                               = fromJust maybeBytesToAdd
-                           }
+                         (SSHMessageChannelWindowAdjust {
+                              sshMessageRecipientChannel
+                                = fromJust maybeRecipientChannel,
+                              sshMessageBytesToAdd
+                                = fromJust maybeBytesToAdd
+                            },
+                          transportState)
     Just 94 -> do
       maybeRecipientChannel <- streamReadWord32 stream
       maybeData <- streamReadBinaryString stream
       case maybeData of
         Nothing -> return Nothing
         Just _ -> return $ Just
-                         SSHMessageChannelData {
-                             sshMessageRecipientChannel
-                               = fromJust maybeRecipientChannel,
-                             sshMessageData
-                               = fromJust maybeData
-                           }
+                         (SSHMessageChannelData {
+                              sshMessageRecipientChannel
+                                = fromJust maybeRecipientChannel,
+                              sshMessageData
+                                = fromJust maybeData
+                            },
+                          transportState)
     Just 95 -> do
       maybeRecipientChannel <- streamReadWord32 stream
       maybeDataTypeCode <- streamReadWord32 stream
@@ -657,32 +690,35 @@ streamReadSSHMessage stream transportState = do
       case maybeData of
         Nothing -> return Nothing
         Just _ -> return $ Just
-                         SSHMessageChannelExtendedData {
-                             sshMessageRecipientChannel
-                               = fromJust maybeRecipientChannel,
-                             sshMessageDataTypeCode
-                               = fromJust maybeDataTypeCode,
-                             sshMessageData
-                               = fromJust maybeData
-                           }
+                         (SSHMessageChannelExtendedData {
+                              sshMessageRecipientChannel
+                                = fromJust maybeRecipientChannel,
+                              sshMessageDataTypeCode
+                                = fromJust maybeDataTypeCode,
+                              sshMessageData
+                                = fromJust maybeData
+                            },
+                          transportState)
     Just 96 -> do
       maybeRecipientChannel <- streamReadWord32 stream
       case maybeRecipientChannel of
         Nothing -> return Nothing
         Just _ -> return $ Just
-                         SSHMessageChannelEOF {
-                             sshMessageRecipientChannel
-                               = fromJust maybeRecipientChannel
-                           }
+                         (SSHMessageChannelEOF {
+                              sshMessageRecipientChannel
+                                = fromJust maybeRecipientChannel
+                            },
+                          transportState)
     Just 97 -> do
       maybeRecipientChannel <- streamReadWord32 stream
       case maybeRecipientChannel of
         Nothing -> return Nothing
         Just _ -> return $ Just
-                         SSHMessageChannelClose {
-                             sshMessageRecipientChannel
-                               = fromJust maybeRecipientChannel
-                           }
+                         (SSHMessageChannelClose {
+                              sshMessageRecipientChannel
+                                = fromJust maybeRecipientChannel
+                            },
+                          transportState)
     Just 98 -> do
       maybeRecipientChannel <- streamReadWord32 stream
       maybeRequestType <- streamReadString stream
@@ -691,98 +727,35 @@ streamReadSSHMessage stream transportState = do
       case maybeRecipientChannel of
         Nothing -> return Nothing
         Just _ -> return $ Just
-                         SSHMessageChannelRequest {
-                             sshMessageRecipientChannel
-                               = fromJust maybeRecipientChannel,
-                             sshMessageRequestType
-                               = fromJust maybeRequestType,
-                             sshMessageWantReply
-                               = fromJust maybeWantReply,
-                             sshMessageChannelRequestFields
-                               = fromJust maybeChannelRequestFields
-                           }
+                         (SSHMessageChannelRequest {
+                              sshMessageRecipientChannel
+                                = fromJust maybeRecipientChannel,
+                              sshMessageRequestType
+                                = fromJust maybeRequestType,
+                              sshMessageWantReply
+                                = fromJust maybeWantReply,
+                              sshMessageChannelRequestFields
+                                = fromJust maybeChannelRequestFields
+                            },
+                          transportState)
     Just 99 -> do
       maybeRecipientChannel <- streamReadWord32 stream
       case maybeRecipientChannel of
         Nothing -> return Nothing
         Just _ -> return $ Just
-                         SSHMessageChannelSuccess {
-                             sshMessageRecipientChannel
-                               = fromJust maybeRecipientChannel
-                           }
+                         (SSHMessageChannelSuccess {
+                              sshMessageRecipientChannel
+                                = fromJust maybeRecipientChannel
+                            },
+                          transportState)
     Just 100 -> do
       maybeRecipientChannel <- streamReadWord32 stream
       case maybeRecipientChannel of
         Nothing -> return Nothing
         Just _ -> return $ Just
-                         SSHMessageChannelFailure {
-                             sshMessageRecipientChannel
-                               = fromJust maybeRecipientChannel
-                           }
+                         (SSHMessageChannelFailure {
+                              sshMessageRecipientChannel
+                                = fromJust maybeRecipientChannel
+                            },
+                          transportState)
     _ -> error "Unknown SSH message code."
-
-
-streamSendNameList :: AbstractStream -> [String] -> IO ()
-streamSendNameList stream nameList = do
-  streamSendString stream $ L.intercalate "," nameList
-
-
-streamSendString :: AbstractStream -> String -> IO ()
-streamSendString stream string = do
-  streamSendBinaryString stream $ UTF8.fromString string
-
-
-streamSendBinaryString :: AbstractStream -> ByteString -> IO ()
-streamSendBinaryString stream bytestring = do
-  streamSendWord32 stream $ fromIntegral $ BS.length bytestring
-  streamSend stream bytestring
-
-
-streamSendBoolean :: AbstractStream -> Bool -> IO ()
-streamSendBoolean stream boolean = do
-  streamSendWord8 stream $ case boolean of
-                             False -> 0
-                             True -> 1
-
-
-streamReadNameList :: AbstractStream -> IO (Maybe [String])
-streamReadNameList stream = do
-  maybeString <- streamReadString stream
-  case maybeString of
-    Nothing -> return Nothing
-    Just string -> do
-      return $ Just $ loop [] string
-      where loop results string =
-              case L.elemIndex ',' string of
-                Nothing -> results ++ [string]
-                Just index -> loop (results ++ [take index string])
-                                   (drop (index + 1) string)
-
-
-streamReadString :: AbstractStream -> IO (Maybe String)
-streamReadString stream = do
-  maybeLength <- streamReadWord32 stream
-  case maybeLength of
-    Nothing -> return Nothing
-    Just length -> do
-      maybePayload <- streamRead stream $ fromIntegral length
-      case maybePayload of
-        Nothing -> return Nothing
-        Just payload -> return $ Just $ UTF8.toString payload
-
-
-streamReadBinaryString :: AbstractStream -> IO (Maybe ByteString)
-streamReadBinaryString stream = do
-  maybeLength <- streamReadWord32 stream
-  case maybeLength of
-    Nothing -> return Nothing
-    Just length -> streamRead stream $ fromIntegral length
-
-
-streamReadBoolean :: AbstractStream -> IO (Maybe Bool)
-streamReadBoolean stream = do
-  maybeValue <- streamReadWord8 stream
-  case maybeValue of
-    Nothing -> return Nothing
-    Just 0 -> return $ Just False
-    Just _ -> return $ Just True
