@@ -17,8 +17,11 @@ description:
 
 Library
   exposed-modules: Network.Protocol.SSH,
+                   Network.Protocol.SSH.Authentication,
+                   Network.Protocol.SSH.Channels,
                    Network.Protocol.SSH.Compression,
                    Network.Protocol.SSH.Encryption,
+                   Network.Protocol.SSH.Global,
                    Network.Protocol.SSH.MAC,
                    Network.Protocol.SSH.KeyExchange,
                    Network.Protocol.SSH.ServerHostKey
@@ -31,8 +34,11 @@ Executable crypto
   main-is: Shell.hs
   other-modules: Internal.AbstractStreams,
                  Network.Protocol.SSH,
+                 Network.Protocol.SSH.Authentication,
+                 Network.Protocol.SSH.Channels,
                  Network.Protocol.SSH.Compression,
                  Network.Protocol.SSH.Encryption,
+                 Network.Protocol.SSH.Global,
                  Network.Protocol.SSH.MAC,
                  Network.Protocol.SSH.KeyExchange,
                  Network.Protocol.SSH.ServerHostKey
@@ -48,8 +54,11 @@ Executable direct-ssh
   main-is: SSH.hs
   other-modules: Internal.AbstractStreams,
                  Network.Protocol.SSH,
+                 Network.Protocol.SSH.Authentication,
+                 Network.Protocol.SSH.Channels,
                  Network.Protocol.SSH.Compression,
                  Network.Protocol.SSH.Encryption,
+                 Network.Protocol.SSH.Global,
                  Network.Protocol.SSH.MAC,
                  Network.Protocol.SSH.KeyExchange,
                  Network.Protocol.SSH.ServerHostKey

@@ -15,6 +15,9 @@ import Data.Maybe
 import Data.Word
 
 import Internal.AbstractStreams
+import Network.Protocol.SSH.Authentication
+import Network.Protocol.SSH.Channels
+import Network.Protocol.SSH.Global
 import qualified Network.Protocol.SSH.MAC as MAC
 
 
@@ -30,7 +33,29 @@ data SSHStream = SSHStream {
 
 
 data SSHMessage
-  = SSHMessageKeyExchangeInit {
+  = SSHMessageDisconnect {
+      sshMessageReasonCode :: Word32,
+      sshMessageDescription :: String,
+      sshMessageLanguageTag :: String
+    }
+  | SSHMessageIgnore {
+      sshMessageData :: ByteString
+    }
+  | SSHMessageUnimplemented {
+      sshMessagePacketSequenceNumber :: Word32
+    }
+  | SSHMessageDebug {
+      sshMessageAlwaysDisplay :: Bool,
+      sshMessageText :: String,
+      sshMessageLanguageTag :: String
+    }
+  | SSHMessageServiceRequest {
+      sshMessageServiceName :: String
+    }
+  | SSHMessageServiceAccept {
+      sshMessageServiceName :: String
+    }
+  | SSHMessageKeyExchangeInit {
       sshMessageCookie :: ByteString,
       sshMessageKeyExchangeAlgorithms :: [String],
       sshMessageServerHostKeyAlgorithms :: [String],
@@ -43,6 +68,93 @@ data SSHMessage
       sshMessageLanguagesClientToServer :: [String],
       sshMessageLanguagesServerToClient :: [String],
       sshMessageFirstKeyExchangePacketFollows :: Bool
+    }
+  | SSHMessageNewKeys {
+    }
+  | SSHMessageUserAuthenticationRequest {
+      sshMessageUserName :: String,
+      sshMessageServiceName :: String,
+      sshMessageMethodName :: String,
+      sshMessageMethodFields :: AuthenticationRequest
+    }
+  | SSHMessageUserAuthenticationFailure {
+      sshMessageAuthenticationMethods :: [String],
+      sshMessagePartialSuccess :: Bool
+    }
+  | SSHMessageUserAuthenticationSuccess {
+    }
+  | SSHMessageUserAuthenticationBanner {
+      sshMessageText :: String,
+      sshMessageLanguageTag :: String
+    }
+  | SSHMessageUserAuthenticationPublicKeyOkay {
+      sshMessageAlgorithmName :: String,
+      sshMessageBlob :: ByteString
+    }
+  | SSHMessageUserAuthenticationPasswordChangeRequest {
+      sshMessageText :: String,
+      sshMessageLanguageTag :: String
+    }
+  | SSHMessageGlobalRequest {
+      sshMessageRequestName :: String,
+      sshMessageWantReply :: Bool,
+      sshMessageRequestFields :: GlobalRequest
+    }
+  | SSHMessageRequestSuccess {
+      sshMessageResponseFields :: GlobalResponse
+    }
+  | SSHMessageRequestFailure {
+    }
+  | SSHMessageChannelOpen {
+      sshMessageChannelType :: String,
+      sshMessageSenderChannel :: Word32,
+      sshMessageInitialWindowSize :: Word32,
+      sshMessageMaximumPacketSize :: Word32,
+      sshMessageChannelOpenFields :: ChannelOpen
+    }
+  | SSHMessageChannelOpenConfirmation {
+      sshMessageRecipientChannel :: Word32,
+      sshMessageSenderChannel :: Word32,
+      sshMessageInitialWindowSize :: Word32,
+      sshMessageMaximumPacketSize :: Word32,
+      sshMessageChannelOpenConfirmationFields :: ChannelOpenConfirmation
+    }
+  | SSHMessageChannelOpenFailure {
+      sshMessageRecipientChannel :: Word32,
+      sshMessageReasonCode :: Word32,
+      sshMessageDescription :: String,
+      sshMessageLanguageTag :: String
+    }
+  | SSHMessageChannelWindowAdjust {
+      sshMessageRecipientChannel :: Word32,
+      sshMessageBytesToAdd :: Word32
+    }
+  | SSHMessageChannelData {
+      sshMessageRecipientChannel :: Word32,
+      sshMessageData :: ByteString
+    }
+  | SSHMessageChannelExtendedData {
+      sshMessageRecipientChannel :: Word32,
+      sshMessageDataTypeCode :: Word32,
+      sshMessageData :: ByteString
+    }
+  | SSHMessageChannelEOF {
+      sshMessageRecipientChannel :: Word32
+    }
+  | SSHMessageChannelClose {
+      sshMessageRecipientChannel :: Word32
+    }
+  | SSHMessageChannelRequest {
+      sshMessageRecipientChannel :: Word32,
+      sshMessageRequestType :: String,
+      sshMessageWantReply :: Bool,
+      sshMessageChannelRequestFields :: ChannelRequest
+    }
+  | SSHMessageChannelSuccess {
+      sshMessageRecipientChannel :: Word32
+    }
+  | SSHMessageChannelFailure {
+      sshMessageRecipientChannel :: Word32
     }
   deriving (Show)
 
@@ -178,6 +290,14 @@ sshStreamClose sshStream = do
 streamSendSSHMessage :: AbstractStream -> SSHMessage -> IO ()
 streamSendSSHMessage stream message = do
   case message of
+    SSHMessageDisconnect { } -> do
+      streamSendWord8 stream 1
+      streamSendWord32 stream
+       $ sshMessageReasonCode message
+      streamSendString stream
+       $ sshMessageDescription message
+      streamSendString stream
+       $ sshMessageLanguageTag message
     SSHMessageKeyExchangeInit { } -> do
       streamSendWord8 stream 20
       streamSend stream $ sshMessageCookie message
@@ -211,7 +331,22 @@ streamReadSSHMessage stream = do
   maybeMessageType <- streamReadWord8 stream
   case maybeMessageType of
     Nothing -> error "Incoming SSH stream unexpectedly ended."
-    Just 1 -> return Nothing -- Disconnect
+    Just 1 -> do
+      maybeReasonCode <- streamReadWord32 stream
+      maybeDescription <- streamReadString stream
+      maybeLanguageTag <- streamReadString stream
+      case maybeLanguageTag of
+        Nothing -> return Nothing
+        Just _ ->
+          return $ Just
+                 SSHMessageDisconnect {
+                     sshMessageReasonCode
+                       = fromJust maybeReasonCode,
+                     sshMessageDescription
+                       = fromJust maybeDescription,
+                     sshMessageLanguageTag
+                       = fromJust maybeLanguageTag
+                   }
     Just 2 -> return Nothing -- Ignore
     Just 3 -> return Nothing -- Unimplemented
     Just 4 -> return Nothing -- Debug
