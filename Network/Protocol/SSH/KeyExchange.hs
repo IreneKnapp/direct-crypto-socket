@@ -8,7 +8,8 @@ module Network.Protocol.SSH.KeyExchange (Algorithm(..),
   where
 
 import Network.Protocol.SSH.Types
-import qualified Network.Protocol.SSH.ServerHostKey as ServerHostKey
+import {-# SOURCE #-} qualified
+  Network.Protocol.SSH.ServerHostKey as ServerHostKey
 
 
 data Algorithm = Algorithm_Diffie_Hellman_Group1_SHA1

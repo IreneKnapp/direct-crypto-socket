@@ -116,18 +116,30 @@ sshClient hostname = do
               streamClose stream
               error "No appropriate SSH key-exchange algorithm."
             Just keyExchangeAlgorithm -> do
-              putStrLn $ "Connected."
-              let loop transportState = do
-                    maybeResult <- streamReadSSHMessage stream transportState
-                    case maybeResult of
-                      Nothing -> return ()
-                      Just (message, _, transportState) -> do
-                        putStrLn $ show message
-                        putStrLn $ ""
-                        loop transportState
-              loop transportState
-              putStrLn $ "Disconnecting."
-              streamClose stream
+              let maybeServerHostKeyAlgorithm
+                    = ServerHostKey.computeAlgorithm keyExchangeAlgorithm
+                                                     clientHostKeyAlgorithms
+                                                     serverHostKeyAlgorithms
+              case maybeServerHostKeyAlgorithm of
+                Nothing -> do
+                  streamClose stream
+                  error "No appropriate SSH server-host-key algorithm."
+                Just serverHostKeyAlgorithm -> do
+                  putStrLn $ "Server host key algorithm: "
+                             ++ ServerHostKey.algorithmName
+                                 serverHostKeyAlgorithm
+                  putStrLn $ "Connected."
+                  let loop transportState = do
+                        maybeResult <- streamReadSSHMessage stream transportState
+                        case maybeResult of
+                          Nothing -> return ()
+                          Just (message, _, transportState) -> do
+                            putStrLn $ show message
+                            putStrLn $ ""
+                            loop transportState
+                  loop transportState
+                  putStrLn $ "Disconnecting."
+                  streamClose stream
 
 
 generateCookie :: IO ByteString
