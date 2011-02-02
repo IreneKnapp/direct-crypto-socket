@@ -125,35 +125,92 @@ sshClient hostname = do
                   streamClose stream
                   error "No appropriate SSH server-host-key algorithm."
                 Just serverHostKeyAlgorithm -> do
-                  putStrLn $ "Server host key algorithm: "
-                             ++ ServerHostKey.algorithmName
-                                 serverHostKeyAlgorithm
+                  let clientEncryptionAlgorithmsClientToServer
+                        = catMaybes
+                           $ map Encryption.algorithmFromName
+                                 $ sshMessageEncryptionAlgorithmsClientToServer
+                                    clientKeyExchangeInitMessage
+                      serverEncryptionAlgorithmsClientToServer
+                        = catMaybes
+                           $ map Encryption.algorithmFromName
+                                 $ sshMessageEncryptionAlgorithmsClientToServer
+                                    serverKeyExchangeInitMessage
+                      clientEncryptionAlgorithmsServerToClient
+                        = catMaybes
+                           $ map Encryption.algorithmFromName
+                                 $ sshMessageEncryptionAlgorithmsServerToClient
+                                    clientKeyExchangeInitMessage
+                      serverEncryptionAlgorithmsServerToClient
+                        = catMaybes
+                           $ map Encryption.algorithmFromName
+                                 $ sshMessageEncryptionAlgorithmsServerToClient
+                                    serverKeyExchangeInitMessage
+                      maybeEncryptionAlgorithmClientToServer
+                        = Encryption.computeAlgorithm
+                           clientEncryptionAlgorithmsClientToServer
+                           serverEncryptionAlgorithmsClientToServer
+                      maybeEncryptionAlgorithmServerToClient
+                        = Encryption.computeAlgorithm
+                           clientEncryptionAlgorithmsServerToClient
+                           serverEncryptionAlgorithmsServerToClient
+                  case (maybeEncryptionAlgorithmClientToServer,
+                        maybeEncryptionAlgorithmServerToClient) of
+                    (Just encryptionAlgorithmClientToServer,
+                     Just encryptionAlgorithmServerToClient) -> do
+                      let clientMACAlgorithmsClientToServer
+                            = catMaybes
+                               $ map MAC.algorithmFromName
+                                     $ sshMessageMACAlgorithmsClientToServer
+                                        clientKeyExchangeInitMessage
+                          serverMACAlgorithmsClientToServer
+                            = catMaybes
+                               $ map MAC.algorithmFromName
+                                     $ sshMessageMACAlgorithmsClientToServer
+                                        serverKeyExchangeInitMessage
+                          clientMACAlgorithmsServerToClient
+                            = catMaybes
+                               $ map MAC.algorithmFromName
+                                     $ sshMessageMACAlgorithmsServerToClient
+                                        clientKeyExchangeInitMessage
+                          serverMACAlgorithmsServerToClient
+                            = catMaybes
+                               $ map MAC.algorithmFromName
+                                     $ sshMessageMACAlgorithmsServerToClient
+                                        serverKeyExchangeInitMessage
+                          maybeMACAlgorithmClientToServer
+                            = MAC.computeAlgorithm
+                               clientMACAlgorithmsClientToServer
+                               serverMACAlgorithmsClientToServer
+                          maybeMACAlgorithmServerToClient
+                            = MAC.computeAlgorithm
+                               clientMACAlgorithmsServerToClient
+                               serverMACAlgorithmsServerToClient
+                      case (maybeMACAlgorithmClientToServer,
+                            maybeMACAlgorithmServerToClient) of
+                        (Just macAlgorithmClientToServer,
+                         Just macAlgorithmServerToClient) -> do
+                          putStrLn $ "Connected."
+                          let loop transportState = do
+                                maybeResult <- streamReadSSHMessage stream transportState
+                                case maybeResult of
+                                  Nothing -> return ()
+                                  Just (message, _, transportState) -> do
+                                    putStrLn $ show message
+                                    putStrLn $ ""
+                                    loop transportState
+                          loop transportState
+                          putStrLn $ "Disconnecting."
+                          streamClose stream
+                        _ -> do
+                         streamClose stream
+                         error
+                          "No appropriate SSH message-authentication algorithm."
+                    _ -> do
+                      streamClose stream
+                      error "No appropriate SSH encryption algorithm."
                   putStrLn $ "Connected."
-                  let loop transportState = do
-                        maybeResult <- streamReadSSHMessage stream transportState
-                        case maybeResult of
-                          Nothing -> return ()
-                          Just (message, _, transportState) -> do
-                            putStrLn $ show message
-                            putStrLn $ ""
-                            loop transportState
-                  loop transportState
-                  putStrLn $ "Disconnecting."
-                  streamClose stream
 
 
 generateCookie :: IO ByteString
 generateCookie = do
   mapM (\_ -> getStdRandom random) [1..16] >>= return . BS.pack
-
-
-knownServerHostKeyAlgorithmNames :: [String]
-knownServerHostKeyAlgorithmNames = []
-
-
-knownEncryptionAlgorithmNames :: [String]
-knownEncryptionAlgorithmNames = []
-
-
-knownCompressionAlgorithmNames :: [String]
-knownCompressionAlgorithmNames = []

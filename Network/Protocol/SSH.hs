@@ -217,7 +217,6 @@ sshStreamClose sshStream = do
 
 streamSendSSHMessage :: AbstractStream -> SSHMessage -> IO ()
 streamSendSSHMessage stream message = do
-  putStrLn $ show message
   case message of
     -- TODO everything else
     SSHMessageDisconnect { } -> do

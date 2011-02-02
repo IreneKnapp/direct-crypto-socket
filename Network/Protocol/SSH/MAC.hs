@@ -1,5 +1,8 @@
 module Network.Protocol.SSH.MAC (Algorithm(..),
                                  knownAlgorithmNames,
+                                 algorithmName,
+                                 algorithmFromName,
+                                 computeAlgorithm,
                                  algorithmCodeLength,
                                  algorithmComputeCode)
   where
@@ -15,7 +18,28 @@ data Algorithm = Algorithm_HMAC_SHA1
 
 
 knownAlgorithmNames :: [String]
-knownAlgorithmNames = ["hmac-sha1", "none"]
+knownAlgorithmNames = ["hmac-sha1"]
+
+
+algorithmName :: Algorithm -> String
+algorithmName Algorithm_HMAC_SHA1 = "hmac-sha1"
+algorithmName Algorithm_None = "none"
+
+
+algorithmFromName :: String -> Maybe Algorithm
+algorithmFromName "hmac-sha1" = Just Algorithm_HMAC_SHA1
+algorithmFromName "none" = Just Algorithm_None
+algorithmFromName _ = Nothing
+
+
+computeAlgorithm :: [Algorithm] -> [Algorithm] -> Maybe Algorithm
+computeAlgorithm clientAlgorithms serverAlgorithms =
+  let consider (algorithm:remainingAlgorithms) =
+        if elem algorithm serverAlgorithms
+          then Just algorithm
+          else consider remainingAlgorithms
+      consider [] = Nothing
+  in consider clientAlgorithms
 
 
 algorithmCodeLength :: Algorithm -> Int
