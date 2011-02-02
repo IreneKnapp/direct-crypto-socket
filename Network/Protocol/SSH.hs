@@ -13,6 +13,8 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.UTF8 as UTF8
 import qualified Data.List as L
+import Data.Map (Map)
+import qualified Data.Map as Map
 import Data.Maybe
 import Data.Word
 
@@ -38,7 +40,19 @@ data SSHStream = SSHStream {
 data SSHTransportState = SSHTransportState {
     sshTransportStateUserAuthenticationMode :: Maybe SSHUserAuthenticationMode,
     sshTransportStateGlobalRequestsPendingSelfAsSender :: [SSHMessage],
-    sshTransportStateGlobalRequestsPendingSelfAsRecipient :: [SSHMessage]
+    sshTransportStateGlobalRequestsPendingSelfAsRecipient :: [SSHMessage],
+    sshTransportStateChannelOpensPendingSelfAsSender :: [SSHMessage],
+    sshTransportStateChannelOpensPendingSelfAsRecipient :: [SSHMessage],
+    sshTransportStateChannelsByLocalID :: Map Word32 SSHChannelState,
+    sshTransportStateChannelsByRemoteID :: Map Word32 SSHChannelState
+  }
+
+
+data SSHChannelState = SSHChannelState {
+    sshChannelStateLocalID :: Word32,
+    sshChannelStateRemoteID :: Word32,
+    sshChannelStateRequestsPendingSelfAsSender :: [SSHMessage],
+    sshChannelStateRequestsPendingSelfAsRecipient :: [SSHMessage]
   }
 
 
@@ -203,7 +217,15 @@ startSSH underlyingStream = do
                           sshTransportStateGlobalRequestsPendingSelfAsSender
                             = [],
                           sshTransportStateGlobalRequestsPendingSelfAsRecipient
-                            = []
+                            = [],
+                          sshTransportStateChannelOpensPendingSelfAsSender
+                            = [],
+                          sshTransportStateChannelOpensPendingSelfAsRecipient
+                            = [],
+                          sshTransportStateChannelsByLocalID
+                            = Map.empty,
+                          sshTransportStateChannelsByRemoteID
+                            = Map.empty
                        }
   return (stream, transportState)
 
@@ -315,6 +337,7 @@ sshStreamClose sshStream = do
 streamSendSSHMessage :: AbstractStream -> SSHMessage -> IO ()
 streamSendSSHMessage stream message = do
   case message of
+    -- TODO everything else
     SSHMessageDisconnect { } -> do
       streamSendWord8 stream 1
       streamSendWord32 stream
@@ -610,7 +633,9 @@ streamReadSSHMessage stream transportState = do
                 = sshTransportStateGlobalRequestsPendingSelfAsRecipient
                    transportState
               newRequestsPending
-                = oldRequestsPending ++ [result]
+                = if fromJust maybeWantReply
+                    then oldRequestsPending ++ [result]
+                    else oldRequestsPending
           transportState
             <- return transportState {
                           sshTransportStateGlobalRequestsPendingSelfAsRecipient
@@ -639,10 +664,10 @@ streamReadSSHMessage stream transportState = do
              Nothing -> error $ "SSH global response received "
                               ++ "without matching request."
              Just requestName ->
-                Global.streamReadResponseFields
-                 stream
-                 requestName
-                 (sshMessageRequestFields $ fromJust maybeMatchingRequest)
+               Global.streamReadResponseFields
+                stream
+                requestName
+                (sshMessageRequestFields $ fromJust maybeMatchingRequest)
       case maybeResponseFields of
         Nothing -> return Nothing
         Just _ -> do
@@ -662,47 +687,86 @@ streamReadSSHMessage stream transportState = do
       maybeSenderChannel <- streamReadWord32 stream
       maybeInitialWindowSize <- streamReadWord32 stream
       maybeMaximumPacketSize <- streamReadWord32 stream
-      maybeChannelOpenFields <- return $ Just undefined -- TODO
+      maybeChannelOpenFields
+        <- case maybeChannelType of
+             Nothing -> return Nothing
+             Just channelType ->
+               Channels.streamReadChannelOpenFields stream channelType
       case maybeChannelOpenFields of
         Nothing -> return Nothing
-        Just _ -> return $ Just
-                         (SSHMessageChannelOpen {
-                              sshMessageChannelType
-                                = fromJust maybeChannelType,
-                              sshMessageSenderChannel
-                                = fromJust maybeSenderChannel,
-                              sshMessageInitialWindowSize
-                                = fromJust maybeInitialWindowSize,
-                              sshMessageMaximumPacketSize
-                                = fromJust maybeMaximumPacketSize,
-                              sshMessageChannelOpenFields
-                                = fromJust maybeChannelOpenFields
-                            },
-                          Nothing,
-                          transportState)
+        Just _ -> do
+          let result = SSHMessageChannelOpen {
+                           sshMessageChannelType
+                             = fromJust maybeChannelType,
+                           sshMessageSenderChannel
+                             = fromJust maybeSenderChannel,
+                           sshMessageInitialWindowSize
+                             = fromJust maybeInitialWindowSize,
+                           sshMessageMaximumPacketSize
+                             = fromJust maybeMaximumPacketSize,
+                           sshMessageChannelOpenFields
+                             = fromJust maybeChannelOpenFields
+                         }
+              oldChannelOpensPending
+                = sshTransportStateChannelOpensPendingSelfAsRecipient
+                   transportState
+              newChannelOpensPending
+                = oldChannelOpensPending ++ [result]
+          transportState
+            <- return transportState {
+                          sshTransportStateChannelOpensPendingSelfAsRecipient
+                            = newChannelOpensPending
+                        }
+          return $ Just (result,
+                         Nothing,
+                         transportState)
     Just 91 -> do
+      let oldChannelOpensPending
+            = sshTransportStateChannelOpensPendingSelfAsSender
+               transportState
+          (maybeMatchingChannelOpen, newChannelOpensPending)
+            = case oldChannelOpensPending of
+                [] -> (Nothing, [])
+                (matchingChannelOpen:rest) -> (Just matchingChannelOpen, rest)
+          maybeChannelType
+            = fmap sshMessageChannelType maybeMatchingChannelOpen
+      transportState
+        <- return transportState {
+                      sshTransportStateChannelOpensPendingSelfAsSender
+                        = newChannelOpensPending
+                    }
       maybeRecipientChannel <- streamReadWord32 stream
       maybeSenderChannel <- streamReadWord32 stream
       maybeInitialWindowSize <- streamReadWord32 stream
       maybeMaximumPacketSize <- streamReadWord32 stream
-      maybeChannelOpenConfirmationFields <- return $ Just undefined -- TODO
+      maybeChannelOpenConfirmationFields
+        <- case maybeChannelType of
+             Nothing -> error $ "SSH channel-open response received "
+                                ++ "without matching request."
+             Just channelType ->
+               Channels.streamReadChannelOpenConfirmationFields
+                stream
+                channelType
+                (sshMessageChannelOpenFields
+                  $ fromJust maybeMatchingChannelOpen)
       case maybeChannelOpenConfirmationFields of
         Nothing -> return Nothing
-        Just _ -> return $ Just
-                         (SSHMessageChannelOpenConfirmation {
-                              sshMessageRecipientChannel
-                                = fromJust maybeRecipientChannel,
-                              sshMessageSenderChannel
-                                = fromJust maybeSenderChannel,
-                              sshMessageInitialWindowSize
-                                = fromJust maybeInitialWindowSize,
-                              sshMessageMaximumPacketSize
-                                = fromJust maybeMaximumPacketSize,
-                              sshMessageChannelOpenConfirmationFields
-                                = fromJust maybeChannelOpenConfirmationFields
-                            },
-                          Nothing,
-                          transportState)
+        Just _ -> do
+          let result = SSHMessageChannelOpenConfirmation {
+                           sshMessageRecipientChannel
+                             = fromJust maybeRecipientChannel,
+                           sshMessageSenderChannel
+                             = fromJust maybeSenderChannel,
+                           sshMessageInitialWindowSize
+                             = fromJust maybeInitialWindowSize,
+                           sshMessageMaximumPacketSize
+                             = fromJust maybeMaximumPacketSize,
+                           sshMessageChannelOpenConfirmationFields
+                             = fromJust maybeChannelOpenConfirmationFields
+                         }
+          return $ Just (result,
+                         maybeMatchingChannelOpen,
+                         transportState)
     Just 92 -> do
       maybeRecipientChannel <- streamReadWord32 stream
       maybeReasonCode <- streamReadWord32 stream
@@ -794,22 +858,65 @@ streamReadSSHMessage stream transportState = do
       maybeRecipientChannel <- streamReadWord32 stream
       maybeRequestType <- streamReadString stream
       maybeWantReply <- streamReadBoolean stream
-      maybeChannelRequestFields <- return $ Just undefined -- TODO
-      case maybeRecipientChannel of
+      maybeChannelRequestFields
+        <- case maybeRequestType of
+             Nothing -> return Nothing
+             Just requestType ->
+               Channels.streamReadChannelRequestFields stream requestType
+      case maybeChannelRequestFields of
         Nothing -> return Nothing
-        Just _ -> return $ Just
-                         (SSHMessageChannelRequest {
-                              sshMessageRecipientChannel
-                                = fromJust maybeRecipientChannel,
-                              sshMessageRequestType
-                                = fromJust maybeRequestType,
-                              sshMessageWantReply
-                                = fromJust maybeWantReply,
-                              sshMessageChannelRequestFields
-                                = fromJust maybeChannelRequestFields
-                            },
-                          Nothing,
-                          transportState)
+        Just _ -> do
+          let result = SSHMessageChannelRequest {
+                           sshMessageRecipientChannel
+                             = fromJust maybeRecipientChannel,
+                           sshMessageRequestType
+                             = fromJust maybeRequestType,
+                           sshMessageWantReply
+                             = fromJust maybeWantReply,
+                           sshMessageChannelRequestFields
+                             = fromJust maybeChannelRequestFields
+                         }
+              oldChannelsByLocalID
+                = sshTransportStateChannelsByLocalID transportState
+              oldChannelsByRemoteID
+                = sshTransportStateChannelsByRemoteID transportState
+              maybeOldChannel
+                = Map.lookup (fromJust maybeRecipientChannel)
+                             oldChannelsByRemoteID
+          oldChannel <-
+            case maybeOldChannel of
+              Nothing -> error $ "Attempting to send SSH channel request "
+                                 ++ "for channel that doesn't exist."
+              Just oldChannel -> return oldChannel
+          let oldRequestsPending
+                = sshChannelStateRequestsPendingSelfAsSender oldChannel
+              newRequestsPending
+                = if fromJust maybeWantReply
+                    then oldRequestsPending ++ [result]
+                    else oldRequestsPending
+              newChannel
+                = oldChannel {
+                      sshChannelStateRequestsPendingSelfAsSender
+                        = newRequestsPending
+                    }
+              newChannelsByLocalID
+                = Map.insert (sshChannelStateLocalID newChannel)
+                             newChannel
+                             oldChannelsByLocalID
+              newChannelsByRemoteID
+                = Map.insert (sshChannelStateRemoteID newChannel)
+                             newChannel
+                             oldChannelsByRemoteID
+          transportState
+            <- return $ transportState {
+                            sshTransportStateChannelsByLocalID
+                              = newChannelsByLocalID,
+                            sshTransportStateChannelsByRemoteID
+                              = newChannelsByRemoteID
+                          }
+          return $ Just (result,
+                         Nothing,
+                         transportState)
     Just 99 -> do
       maybeRecipientChannel <- streamReadWord32 stream
       case maybeRecipientChannel of

@@ -1,9 +1,15 @@
 module Network.Protocol.SSH.Channels (ChannelOpen(..),
                                       ChannelOpenConfirmation(..),
-                                      ChannelRequest(..))
+                                      ChannelRequest(..),
+                                      streamReadChannelOpenFields,
+                                      streamReadChannelOpenConfirmationFields,
+                                      streamReadChannelRequestFields)
   where
 
 import Data.Word
+
+import Internal.AbstractStreams
+import Network.Protocol.SSH.Internal
 
 
 data ChannelOpen
@@ -81,3 +87,25 @@ data ChannelRequest
       channelRequestLanguageTag :: String
     }
   deriving (Show)
+
+
+streamReadChannelOpenFields :: AbstractStream
+                            -> String
+                            -> IO (Maybe ChannelOpen)
+streamReadChannelOpenFields stream channelType = do
+  undefined
+
+
+streamReadChannelOpenConfirmationFields :: AbstractStream
+                                        -> String
+                                        -> ChannelOpen
+                                        -> IO (Maybe ChannelOpenConfirmation)
+streamReadChannelOpenConfirmationFields stream channelType channelOpen = do
+  undefined
+
+
+streamReadChannelRequestFields :: AbstractStream
+                               -> String
+                               -> IO (Maybe ChannelRequest)
+streamReadChannelRequestFields stream requestType = do
+  undefined
