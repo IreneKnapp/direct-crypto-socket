@@ -17,6 +17,7 @@ import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Maybe
 import Data.Word
+import System.Random
 
 import Internal.AbstractStreams
 import qualified Network.Protocol.SSH.Authentication as Authentication
@@ -231,7 +232,7 @@ startSSH underlyingStream = do
 
 
 sshStreamSend :: SSHStream -> ByteString -> IO ()
-sshStreamSend sshStream bytestring = do
+sshStreamSend sshStream payload = do
   isOpen <- readMVar $ sshStreamOpen sshStream
   if not isOpen
     then error "SSH stream already closed."
@@ -239,6 +240,32 @@ sshStreamSend sshStream bytestring = do
   macAlgorithm <- readMVar $ sshStreamSendMACAlgorithm sshStream
   sequenceNumber <- takeMVar $ sshStreamSendSequenceNumber sshStream
   putMVar (sshStreamSendSequenceNumber sshStream) $ sequenceNumber + 1
+  let correctMAC =
+        MAC.algorithmComputeCode macAlgorithm
+                                 sequenceNumber
+                                 payload
+      blockSize = 8
+      payloadLength = BS.length payload
+      minimumPaddingLength = blockSize
+                             - (mod (4 + 1 + payloadLength + 4) blockSize)
+                             + 4
+      maximumAdditionalPaddingBlocks =
+        (fromIntegral (maxBound :: Word8) - minimumPaddingLength)
+        `div` blockSize
+  additionalPaddingBlocks
+    <- getStdRandom $ randomR (0, maximumAdditionalPaddingBlocks)
+  let totalPaddingLength = minimumPaddingLength
+                           + blockSize * additionalPaddingBlocks
+      packetLength = payloadLength + totalPaddingLength + 1
+  padding
+    <- mapM (\_ -> getStdRandom random) [1..totalPaddingLength]
+       >>= return . BS.pack
+  let packet = BS.concat [packWord32 $ fromIntegral packetLength,
+                          packWord8 $ fromIntegral totalPaddingLength,
+                          payload,
+                          correctMAC]
+      stream = sshStreamUnderlyingStream sshStream
+  streamSend stream packet
 
 
 sshStreamRead :: SSHStream -> Int -> IO (Maybe ByteString)

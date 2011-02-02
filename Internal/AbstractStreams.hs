@@ -2,6 +2,8 @@ module Internal.AbstractStreams (AbstractStream(..),
                                  connectToHostname,
                                  streamSendWord32,
                                  streamSendWord8,
+                                 packWord32,
+                                 packWord8,
                                  streamReadCRLF,
                                  streamReadWord32,
                                  streamReadWord8
@@ -112,17 +114,12 @@ socketStreamClose socketStream = do
 
 streamSendWord32 :: AbstractStream -> Word32 -> IO ()
 streamSendWord32 stream word = do
-  streamSend stream
-             $ BS.pack [fromIntegral $ shiftR word 24,
-                        fromIntegral $ shiftR word 16,
-                        fromIntegral $ shiftR word 8,
-                        fromIntegral $ shiftR word 0]
+  streamSend stream $ packWord32 word
 
 
 streamSendWord8 :: AbstractStream -> Word8 -> IO ()
 streamSendWord8 stream word = do
-  streamSend stream
-             $ BS.pack [fromIntegral $ shiftR word 0]
+  streamSend stream $ packWord8 word
 
 
 streamReadCRLF :: AbstractStream -> IO (Maybe ByteString)
@@ -138,6 +135,17 @@ streamReadCRLF stream = do
                            else return $ Just
                                   $ BS.take (BS.length result - 1) result
                       | otherwise -> loop $ BS.append result byte
+
+
+packWord32 :: Word32 -> ByteString
+packWord32 word = BS.pack [fromIntegral $ shiftR word 24,
+                           fromIntegral $ shiftR word 16,
+                           fromIntegral $ shiftR word 8,
+                           fromIntegral $ shiftR word 0]
+
+
+packWord8 :: Word8 -> ByteString
+packWord8 word = BS.pack [fromIntegral $ shiftR word 0]
 
 
 streamReadWord32 :: AbstractStream -> IO (Maybe Word32)

@@ -6,6 +6,7 @@ module Network.Protocol.SSH.Channels (ChannelOpen(..),
                                       streamReadChannelRequestFields)
   where
 
+import Data.Maybe
 import Data.Word
 
 import Internal.AbstractStreams
@@ -136,7 +137,7 @@ streamReadChannelOpenFields stream channelType = do
       case maybeOriginatorPort of
         Nothing -> return Nothing
         Just _ -> return $ Just
-                         ChannelOpenForwardedTCPIP {
+                         ChannelOpenDirectTCPIP {
                              channelOpenAddressToConnect
                                = fromJust maybeAddressToConnect,
                              channelOpenPortToConnect
@@ -199,7 +200,7 @@ streamReadChannelRequestFields stream requestType = do
       maybeSingleConnection <- streamReadBoolean stream
       maybeX11AuthenticationProtocol <- streamReadString stream
       maybeX11AuthenticationCookie <- streamReadString stream
-      maybeX11ScreenNumber <- streamReadString stream
+      maybeX11ScreenNumber <- streamReadWord32 stream
       case maybeX11ScreenNumber of
         Nothing -> return Nothing
         Just _ -> return $ Just
@@ -214,7 +215,7 @@ streamReadChannelRequestFields stream requestType = do
                                = fromJust maybeX11ScreenNumber
                            }
     "env" -> do
-      mabyeVariableName <- streamReadString stream
+      maybeVariableName <- streamReadString stream
       maybeVariableValue <- streamReadString stream
       case maybeVariableValue of
         Nothing -> return Nothing
@@ -278,7 +279,7 @@ streamReadChannelRequestFields stream requestType = do
         Nothing -> return Nothing
         Just _ -> return $ Just
                          ChannelRequestSignal {
-                             channelRequestSignal
+                             channelRequestSignalName
                                = fromJust maybeSignalName
                            }
     "exit-status" -> do
