@@ -4,6 +4,7 @@ module Network.Protocol.SSH.Encryption (Algorithm(..),
 
 
 data Algorithm = Algorithm_3DES_CBC
+               deriving (Eq)
 
 
 knownAlgorithmNames :: [String]

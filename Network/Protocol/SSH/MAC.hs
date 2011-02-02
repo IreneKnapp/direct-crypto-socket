@@ -11,6 +11,7 @@ import Data.Word
 
 data Algorithm = Algorithm_HMAC_SHA1
                | Algorithm_None
+               deriving (Eq)
 
 
 knownAlgorithmNames :: [String]

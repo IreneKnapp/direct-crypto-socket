@@ -3,6 +3,7 @@ module Main (main) where
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.UTF8 as UTF8
+import Data.Maybe
 import System.Environment
 import System.Random
 
@@ -48,48 +49,85 @@ sshClient hostname = do
   case maybeIdentification of
     Nothing -> error "SSH identification string not received."
     Just identification -> do
-      (stream, transportState) <- startSSH stream
+      (stream, transportState) <- startSSH stream SSHClient
       cookie <- generateCookie
-      streamSendSSHMessage stream
-       $ SSHMessageKeyExchangeInit {
-                             sshMessageCookie = cookie,
-                             sshMessageKeyExchangeAlgorithms =
-                               KeyExchange.knownAlgorithmNames,
-                             sshMessageServerHostKeyAlgorithms =
-                               ServerHostKey.knownAlgorithmNames,
-                             sshMessageEncryptionAlgorithmsClientToServer =
-                               Encryption.knownAlgorithmNames,
-                             sshMessageEncryptionAlgorithmsServerToClient =
-                               Encryption.knownAlgorithmNames,
-                             sshMessageMACAlgorithmsClientToServer =
-                               MAC.knownAlgorithmNames,
-                             sshMessageMACAlgorithmsServerToClient =
-                               MAC.knownAlgorithmNames,
-                             sshMessageCompressionAlgorithmsClientToServer =
-                               Compression.knownAlgorithmNames,
-                             sshMessageCompressionAlgorithmsServerToClient =
-                               Compression.knownAlgorithmNames,
-                             sshMessageLanguagesClientToServer = [""],
-                             sshMessageLanguagesServerToClient = [""],
-                             sshMessageFirstKeyExchangePacketFollows = False
-                           }
+      let outboundKeyExchangeInitMessage
+            = SSHMessageKeyExchangeInit {
+                  sshMessageCookie = cookie,
+                  sshMessageKeyExchangeAlgorithms =
+                    KeyExchange.knownAlgorithmNames,
+                  sshMessageServerHostKeyAlgorithms =
+                    ServerHostKey.knownAlgorithmNames,
+                  sshMessageEncryptionAlgorithmsClientToServer =
+                    Encryption.knownAlgorithmNames,
+                  sshMessageEncryptionAlgorithmsServerToClient =
+                    Encryption.knownAlgorithmNames,
+                  sshMessageMACAlgorithmsClientToServer =
+                    MAC.knownAlgorithmNames,
+                  sshMessageMACAlgorithmsServerToClient =
+                    MAC.knownAlgorithmNames,
+                  sshMessageCompressionAlgorithmsClientToServer =
+                    Compression.knownAlgorithmNames,
+                  sshMessageCompressionAlgorithmsServerToClient =
+                    Compression.knownAlgorithmNames,
+                  sshMessageLanguagesClientToServer = [""],
+                  sshMessageLanguagesServerToClient = [""],
+                  sshMessageFirstKeyExchangePacketFollows = False
+                }
+      streamSendSSHMessage stream outboundKeyExchangeInitMessage
       maybeResult <- streamReadSSHMessage stream transportState
       case maybeResult of
         Nothing -> error "Unexpectedly disconnected."
-        Just (keyExchangeMessage, maybeOriginalMessage, transportState) -> do
-          putStrLn $ show keyExchangeMessage
-          putStrLn $ "Connected."
-          let loop transportState = do
-                maybeResult <- streamReadSSHMessage stream transportState
-                case maybeResult of
-                  Nothing -> return ()
-                  Just (message, _, transportState) -> do
-                    putStrLn $ show message
-                    putStrLn $ ""
-                    loop transportState
-          loop transportState
-          putStrLn $ "Disconnecting."
-          streamClose stream
+        Just (inboundKeyExchangeInitMessage, _, transportState) -> do
+          let (clientKeyExchangeInitMessage,
+               serverKeyExchangeInitMessage)
+                = case sshTransportStateMode transportState of
+                    SSHClient -> (outboundKeyExchangeInitMessage,
+                                  inboundKeyExchangeInitMessage)
+                    SSHServer -> (inboundKeyExchangeInitMessage,
+                                  outboundKeyExchangeInitMessage)
+              clientKeyExchangeAlgorithms
+                = catMaybes
+                   $ map KeyExchange.algorithmFromName
+                         $ sshMessageKeyExchangeAlgorithms
+                            clientKeyExchangeInitMessage
+              serverKeyExchangeAlgorithms
+                = catMaybes
+                   $ map KeyExchange.algorithmFromName
+                         $ sshMessageKeyExchangeAlgorithms
+                            serverKeyExchangeInitMessage
+              clientHostKeyAlgorithms
+                = catMaybes
+                   $ map ServerHostKey.algorithmFromName
+                         $ sshMessageServerHostKeyAlgorithms
+                            clientKeyExchangeInitMessage
+              serverHostKeyAlgorithms
+                = catMaybes
+                   $ map ServerHostKey.algorithmFromName
+                         $ sshMessageServerHostKeyAlgorithms
+                            serverKeyExchangeInitMessage
+              maybeKeyExchangeAlgorithm
+                = KeyExchange.computeAlgorithm clientKeyExchangeAlgorithms
+                                               serverKeyExchangeAlgorithms
+                                               clientHostKeyAlgorithms
+                                               serverHostKeyAlgorithms
+          case maybeKeyExchangeAlgorithm of
+            Nothing -> do
+              streamClose stream
+              error "No appropriate SSH key-exchange algorithm."
+            Just keyExchangeAlgorithm -> do
+              putStrLn $ "Connected."
+              let loop transportState = do
+                    maybeResult <- streamReadSSHMessage stream transportState
+                    case maybeResult of
+                      Nothing -> return ()
+                      Just (message, _, transportState) -> do
+                        putStrLn $ show message
+                        putStrLn $ ""
+                        loop transportState
+              loop transportState
+              putStrLn $ "Disconnecting."
+              streamClose stream
 
 
 generateCookie :: IO ByteString

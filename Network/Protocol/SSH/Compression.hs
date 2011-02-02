@@ -4,6 +4,7 @@ module Network.Protocol.SSH.Compression (Algorithm(..),
 
 
 data Algorithm = Algorithm_None
+               deriving (Eq)
 
 
 knownAlgorithmNames :: [String]

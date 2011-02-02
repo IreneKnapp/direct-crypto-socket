@@ -13,7 +13,8 @@ category: Network
 synopsis: A native implementation of the SSH-2, TLS/SSL, and related protocols.
 description:
   Direct-Crypto-Sockets is a library which provides both client-side and
-  server-side implementations of the SSH-2, TLS, and related protocols.
+  server-side implementations of the SSH-2, TLS, and related protocols,
+  most notably including SFTP.
 
 Library
   exposed-modules: Network.Protocol.SSH,
@@ -26,7 +27,8 @@ Library
                    Network.Protocol.SSH.KeyExchange,
                    Network.Protocol.SSH.ServerHostKey
   other-modules: Internal.AbstractStreams,
-                 Network.Protocol.SSH.Internal
+                 Network.Protocol.SSH.Internal,
+                 Network.Protocol.SSH.Types
   build-depends: base >= 4.1 && < 5,
                  network >= 2.3.0.1 && < 3,
                  Crypto >= 4.2.3 && < 5
@@ -41,9 +43,10 @@ Executable crypto
                  Network.Protocol.SSH.Encryption,
                  Network.Protocol.SSH.Global,
                  Network.Protocol.SSH.Internal,
-                 Network.Protocol.SSH.MAC,
                  Network.Protocol.SSH.KeyExchange,
-                 Network.Protocol.SSH.ServerHostKey
+                 Network.Protocol.SSH.MAC,
+                 Network.Protocol.SSH.ServerHostKey,
+                 Network.Protocol.SSH.Types
   build-depends: base >= 4.1 && < 5,
                  network >= 2.3.0.1 && < 3,
                  Crypto >= 4.2.3 && < 5,
@@ -62,9 +65,10 @@ Executable direct-ssh
                  Network.Protocol.SSH.Encryption,
                  Network.Protocol.SSH.Global,
                  Network.Protocol.SSH.Internal,
-                 Network.Protocol.SSH.MAC,
                  Network.Protocol.SSH.KeyExchange,
-                 Network.Protocol.SSH.ServerHostKey
+                 Network.Protocol.SSH.MAC,
+                 Network.Protocol.SSH.ServerHostKey,
+                 Network.Protocol.SSH.Types
   build-depends: base >= 4.1 && < 5,
                  network >= 2.3.0.1 && < 3,
                  Crypto >= 4.2.3 && < 5,

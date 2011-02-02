@@ -1,5 +1,7 @@
 module Network.Protocol.SSH (
+                             SSHMode(..),
                              SSHTransportState(..),
+                             SSHChannelState(..),
                              SSHUserAuthenticationMode(..),
                              SSHMessage(..),
                              startSSH,
@@ -20,10 +22,11 @@ import Data.Word
 import System.Random
 
 import Internal.AbstractStreams
+import Network.Protocol.SSH.Internal
+import Network.Protocol.SSH.Types
 import qualified Network.Protocol.SSH.Authentication as Authentication
 import qualified Network.Protocol.SSH.Channels as Channels
 import qualified Network.Protocol.SSH.Global as Global
-import Network.Protocol.SSH.Internal
 import qualified Network.Protocol.SSH.MAC as MAC
 
 
@@ -38,160 +41,8 @@ data SSHStream = SSHStream {
   }
 
 
-data SSHTransportState = SSHTransportState {
-    sshTransportStateUserAuthenticationMode :: Maybe SSHUserAuthenticationMode,
-    sshTransportStateGlobalRequestsPendingSelfAsSender :: [SSHMessage],
-    sshTransportStateGlobalRequestsPendingSelfAsRecipient :: [SSHMessage],
-    sshTransportStateChannelOpensPendingSelfAsSender :: [SSHMessage],
-    sshTransportStateChannelOpensPendingSelfAsRecipient :: [SSHMessage],
-    sshTransportStateChannelsByLocalID :: Map Word32 SSHChannelState,
-    sshTransportStateChannelsByRemoteID :: Map Word32 SSHChannelState
-  }
-
-
-data SSHChannelState = SSHChannelState {
-    sshChannelStateLocalID :: Word32,
-    sshChannelStateRemoteID :: Word32,
-    sshChannelStateRequestsPendingSelfAsSender :: [SSHMessage],
-    sshChannelStateRequestsPendingSelfAsRecipient :: [SSHMessage]
-  }
-
-
-data SSHUserAuthenticationMode
-  = SSHUserAuthenticationModePublicKey
-  | SSHUserAuthenticationModePassword
-
-
-data SSHMessage
-  = SSHMessageDisconnect {
-      sshMessageReasonCode :: Word32,
-      sshMessageDescription :: String,
-      sshMessageLanguageTag :: String
-    }
-  | SSHMessageIgnore {
-      sshMessageData :: ByteString
-    }
-  | SSHMessageUnimplemented {
-      sshMessagePacketSequenceNumber :: Word32
-    }
-  | SSHMessageDebug {
-      sshMessageAlwaysDisplay :: Bool,
-      sshMessageText :: String,
-      sshMessageLanguageTag :: String
-    }
-  | SSHMessageServiceRequest {
-      sshMessageServiceName :: String
-    }
-  | SSHMessageServiceAccept {
-      sshMessageServiceName :: String
-    }
-  | SSHMessageKeyExchangeInit {
-      sshMessageCookie :: ByteString,
-      sshMessageKeyExchangeAlgorithms :: [String],
-      sshMessageServerHostKeyAlgorithms :: [String],
-      sshMessageEncryptionAlgorithmsClientToServer :: [String],
-      sshMessageEncryptionAlgorithmsServerToClient :: [String],
-      sshMessageMACAlgorithmsClientToServer :: [String],
-      sshMessageMACAlgorithmsServerToClient :: [String],
-      sshMessageCompressionAlgorithmsClientToServer :: [String],
-      sshMessageCompressionAlgorithmsServerToClient :: [String],
-      sshMessageLanguagesClientToServer :: [String],
-      sshMessageLanguagesServerToClient :: [String],
-      sshMessageFirstKeyExchangePacketFollows :: Bool
-    }
-  | SSHMessageNewKeys {
-    }
-  | SSHMessageUserAuthenticationRequest {
-      sshMessageUserName :: String,
-      sshMessageServiceName :: String,
-      sshMessageMethodName :: String,
-      sshMessageMethodFields :: Authentication.AuthenticationRequest
-    }
-  | SSHMessageUserAuthenticationFailure {
-      sshMessageAuthenticationMethods :: [String],
-      sshMessagePartialSuccess :: Bool
-    }
-  | SSHMessageUserAuthenticationSuccess {
-    }
-  | SSHMessageUserAuthenticationBanner {
-      sshMessageText :: String,
-      sshMessageLanguageTag :: String
-    }
-  | SSHMessageUserAuthenticationPublicKeyOkay {
-      sshMessageAlgorithmName :: String,
-      sshMessageBlob :: ByteString
-    }
-  | SSHMessageUserAuthenticationPasswordChangeRequest {
-      sshMessageText :: String,
-      sshMessageLanguageTag :: String
-    }
-  | SSHMessageGlobalRequest {
-      sshMessageRequestName :: String,
-      sshMessageWantReply :: Bool,
-      sshMessageRequestFields :: Global.GlobalRequest
-    }
-  | SSHMessageRequestSuccess {
-      sshMessageResponseFields :: Global.GlobalResponse
-    }
-  | SSHMessageRequestFailure {
-    }
-  | SSHMessageChannelOpen {
-      sshMessageChannelType :: String,
-      sshMessageSenderChannel :: Word32,
-      sshMessageInitialWindowSize :: Word32,
-      sshMessageMaximumPacketSize :: Word32,
-      sshMessageChannelOpenFields :: Channels.ChannelOpen
-    }
-  | SSHMessageChannelOpenConfirmation {
-      sshMessageRecipientChannel :: Word32,
-      sshMessageSenderChannel :: Word32,
-      sshMessageInitialWindowSize :: Word32,
-      sshMessageMaximumPacketSize :: Word32,
-      sshMessageChannelOpenConfirmationFields
-        :: Channels.ChannelOpenConfirmation
-    }
-  | SSHMessageChannelOpenFailure {
-      sshMessageRecipientChannel :: Word32,
-      sshMessageReasonCode :: Word32,
-      sshMessageDescription :: String,
-      sshMessageLanguageTag :: String
-    }
-  | SSHMessageChannelWindowAdjust {
-      sshMessageRecipientChannel :: Word32,
-      sshMessageBytesToAdd :: Word32
-    }
-  | SSHMessageChannelData {
-      sshMessageRecipientChannel :: Word32,
-      sshMessageData :: ByteString
-    }
-  | SSHMessageChannelExtendedData {
-      sshMessageRecipientChannel :: Word32,
-      sshMessageDataTypeCode :: Word32,
-      sshMessageData :: ByteString
-    }
-  | SSHMessageChannelEOF {
-      sshMessageRecipientChannel :: Word32
-    }
-  | SSHMessageChannelClose {
-      sshMessageRecipientChannel :: Word32
-    }
-  | SSHMessageChannelRequest {
-      sshMessageRecipientChannel :: Word32,
-      sshMessageRequestType :: String,
-      sshMessageWantReply :: Bool,
-      sshMessageChannelRequestFields :: Channels.ChannelRequest
-    }
-  | SSHMessageChannelSuccess {
-      sshMessageRecipientChannel :: Word32
-    }
-  | SSHMessageChannelFailure {
-      sshMessageRecipientChannel :: Word32
-    }
-  deriving (Show)
-
-
-startSSH :: AbstractStream -> IO (AbstractStream, SSHTransportState)
-startSSH underlyingStream = do
+startSSH :: AbstractStream -> SSHMode -> IO (AbstractStream, SSHTransportState)
+startSSH underlyingStream mode = do
   openMVar <- newMVar True
   readBufferMVar <- newMVar BS.empty
   sendSequenceNumberMVar <- newMVar 0
@@ -213,6 +64,8 @@ startSSH underlyingStream = do
                  streamClose = sshStreamClose sshStream
                }
       transportState = SSHTransportState {
+                          sshTransportStateMode
+                            = mode,
                           sshTransportStateUserAuthenticationMode
                             = Nothing,
                           sshTransportStateGlobalRequestsPendingSelfAsSender
