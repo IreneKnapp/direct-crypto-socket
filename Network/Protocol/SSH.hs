@@ -399,7 +399,7 @@ streamSendSSHMessage stream message = do
                      $ sshMessageLanguagesServerToClient message,
                     packBoolean
                      $ sshMessageFirstKeyExchangePacketFollows message,
-                    packWord8 0]
+                    packWord32 0]
 
 
 streamReadSSHMessage :: AbstractStream
