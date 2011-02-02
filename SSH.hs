@@ -69,8 +69,8 @@ sshClient hostname = do
                                Compression.knownAlgorithmNames,
                              sshMessageCompressionAlgorithmsServerToClient =
                                Compression.knownAlgorithmNames,
-                             sshMessageLanguagesClientToServer = [],
-                             sshMessageLanguagesServerToClient = [],
+                             sshMessageLanguagesClientToServer = [""],
+                             sshMessageLanguagesServerToClient = [""],
                              sshMessageFirstKeyExchangePacketFollows = False
                            }
       maybeResult <- streamReadSSHMessage stream transportState
@@ -79,6 +79,15 @@ sshClient hostname = do
         Just (keyExchangeMessage, maybeOriginalMessage, transportState) -> do
           putStrLn $ show keyExchangeMessage
           putStrLn $ "Connected."
+          let loop transportState = do
+                maybeResult <- streamReadSSHMessage stream transportState
+                case maybeResult of
+                  Nothing -> return ()
+                  Just (message, _, transportState) -> do
+                    putStrLn $ show message
+                    putStrLn $ ""
+                    loop transportState
+          loop transportState
           putStrLn $ "Disconnecting."
           streamClose stream
 

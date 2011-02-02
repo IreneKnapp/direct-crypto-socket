@@ -1,8 +1,8 @@
 module Network.Protocol.SSH.Internal (
-                                      streamSendNameList,
-                                      streamSendString,
-                                      streamSendBinaryString,
-                                      streamSendBoolean,
+                                      packNameList,
+                                      packString,
+                                      packBinaryString,
+                                      packBoolean,
                                       streamReadNameList,
                                       streamReadString,
                                       streamReadBinaryString,
@@ -19,27 +19,27 @@ import Data.Word
 import Internal.AbstractStreams
 
 
-streamSendNameList :: AbstractStream -> [String] -> IO ()
-streamSendNameList stream nameList = do
-  streamSendString stream $ L.intercalate "," nameList
+packNameList :: [String] -> ByteString
+packNameList nameList =
+  packString $ L.intercalate "," nameList
 
 
-streamSendString :: AbstractStream -> String -> IO ()
-streamSendString stream string = do
-  streamSendBinaryString stream $ UTF8.fromString string
+packString :: String -> ByteString
+packString string =
+  packBinaryString $ UTF8.fromString string
 
 
-streamSendBinaryString :: AbstractStream -> ByteString -> IO ()
-streamSendBinaryString stream bytestring = do
-  streamSendWord32 stream $ fromIntegral $ BS.length bytestring
-  streamSend stream bytestring
+packBinaryString :: ByteString -> ByteString
+packBinaryString bytestring =
+  BS.concat [packWord32 $ fromIntegral $ BS.length bytestring,
+             bytestring]
 
 
-streamSendBoolean :: AbstractStream -> Bool -> IO ()
-streamSendBoolean stream boolean = do
-  streamSendWord8 stream $ case boolean of
-                             False -> 0
-                             True -> 1
+packBoolean :: Bool -> ByteString
+packBoolean boolean =
+  packWord8 $ case boolean of
+                False -> 0
+                True -> 1
 
 
 streamReadNameList :: AbstractStream -> IO (Maybe [String])

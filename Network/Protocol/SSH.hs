@@ -263,6 +263,7 @@ sshStreamSend sshStream payload = do
   let packet = BS.concat [packWord32 $ fromIntegral packetLength,
                           packWord8 $ fromIntegral totalPaddingLength,
                           payload,
+                          padding,
                           correctMAC]
       stream = sshStreamUnderlyingStream sshStream
   streamSend stream packet
@@ -363,42 +364,42 @@ sshStreamClose sshStream = do
 
 streamSendSSHMessage :: AbstractStream -> SSHMessage -> IO ()
 streamSendSSHMessage stream message = do
+  putStrLn $ show message
   case message of
     -- TODO everything else
     SSHMessageDisconnect { } -> do
-      streamSendWord8 stream 1
-      streamSendWord32 stream
-       $ sshMessageReasonCode message
-      streamSendString stream
-       $ sshMessageDescription message
-      streamSendString stream
-       $ sshMessageLanguageTag message
+      streamSend stream
+       $ BS.concat [packWord8 1,
+                    packWord32 $ sshMessageReasonCode message,
+                    packString $ sshMessageDescription message,
+                    packString $ sshMessageLanguageTag message]
     SSHMessageKeyExchangeInit { } -> do
-      streamSendWord8 stream 20
-      streamSend stream $ sshMessageCookie message
-      streamSendNameList stream
-       $ sshMessageKeyExchangeAlgorithms message
-      streamSendNameList stream
-       $ sshMessageServerHostKeyAlgorithms message
-      streamSendNameList stream
-       $ sshMessageEncryptionAlgorithmsClientToServer message
-      streamSendNameList stream
-       $ sshMessageEncryptionAlgorithmsServerToClient message
-      streamSendNameList stream
-       $ sshMessageMACAlgorithmsClientToServer message
-      streamSendNameList stream
-       $ sshMessageMACAlgorithmsServerToClient message
-      streamSendNameList stream
-       $ sshMessageCompressionAlgorithmsClientToServer message
-      streamSendNameList stream
-       $ sshMessageCompressionAlgorithmsServerToClient message
-      streamSendNameList stream
-       $ sshMessageLanguagesClientToServer message
-      streamSendNameList stream
-       $ sshMessageLanguagesServerToClient message
-      streamSendBoolean stream
-       $ sshMessageFirstKeyExchangePacketFollows message
-      streamSendWord8 stream 0
+      streamSend stream
+       $ BS.concat [packWord8 20,
+                    sshMessageCookie message,
+                    packNameList
+                     $ sshMessageKeyExchangeAlgorithms message,
+                    packNameList
+                     $ sshMessageServerHostKeyAlgorithms message,
+                    packNameList
+                     $ sshMessageEncryptionAlgorithmsClientToServer message,
+                    packNameList
+                     $ sshMessageEncryptionAlgorithmsServerToClient message,
+                    packNameList
+                     $ sshMessageMACAlgorithmsClientToServer message,
+                    packNameList
+                     $ sshMessageMACAlgorithmsServerToClient message,
+                    packNameList
+                     $ sshMessageCompressionAlgorithmsClientToServer message,
+                    packNameList
+                     $ sshMessageCompressionAlgorithmsServerToClient message,
+                    packNameList
+                     $ sshMessageLanguagesClientToServer message,
+                    packNameList
+                     $ sshMessageLanguagesServerToClient message,
+                    packBoolean
+                     $ sshMessageFirstKeyExchangePacketFollows message,
+                    packWord8 0]
 
 
 streamReadSSHMessage :: AbstractStream
