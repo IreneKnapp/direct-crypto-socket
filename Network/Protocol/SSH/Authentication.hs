@@ -39,6 +39,7 @@ streamReadMethodFields :: AbstractStream
                        -> IO (Maybe AuthenticationRequest)
 streamReadMethodFields stream methodName = do
   case methodName of
+{-
     "publickey" -> do
       maybeSubtype <- streamReadBoolean stream
       case maybeSubtype of
@@ -95,4 +96,5 @@ streamReadMethodFields stream methodName = do
                                  authenticationRequestNewPassword
                                    = fromJust maybeNewPassword
                                }
+-}
     _ -> error "Unknown SSH authentication method."

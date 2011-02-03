@@ -1,5 +1,7 @@
+{-# LANGUAGE DeriveDataTypeable #-}
 module Network.Protocol.SSH.Types (
                                    SSHMode(..),
+                                   SSHExpecting(..),
                                    SSHTransportState(..),
                                    SSHChannelState(..),
                                    SSHUserAuthenticationMode(..),
@@ -12,6 +14,7 @@ import qualified Data.ByteString as BS
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Word
+import Data.Dynamic
 
 import qualified Network.Protocol.SSH.Authentication as Authentication
 import qualified Network.Protocol.SSH.Channels as Channels
@@ -24,8 +27,13 @@ data SSHMode = SSHClient
              deriving (Show)
 
 
+data SSHExpecting = SSHAnything
+                  | SSHNothing String
+
+
 data SSHTransportState = SSHTransportState {
     sshTransportStateMode :: SSHMode,
+    sshTransportStateExpecting :: SSHExpecting,
     sshTransportStateUserAuthenticationMode :: Maybe SSHUserAuthenticationMode,
     sshTransportStateGlobalRequestsPendingSelfAsSender :: [SSHMessage],
     sshTransportStateGlobalRequestsPendingSelfAsRecipient :: [SSHMessage],
@@ -174,4 +182,4 @@ data SSHMessage
   | SSHMessageChannelFailure {
       sshMessageRecipientChannel :: Word32
     }
-  deriving (Show)
+  deriving (Show, Typeable)

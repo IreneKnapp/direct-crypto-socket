@@ -37,6 +37,7 @@ streamReadRequestFields :: AbstractStream
                         -> IO (Maybe GlobalRequest)
 streamReadRequestFields stream requestName = do
   case requestName of
+{-
     "tcpip-forward" -> do
       maybeAddressToBind <- streamReadString stream
       maybePortToBind <- streamReadWord32 stream
@@ -61,6 +62,7 @@ streamReadRequestFields stream requestName = do
                              globalRequestPortToBind
                                = fromJust maybePortToBind
                            }
+-}
     _ -> error "Unknown SSH global request."
 
 
@@ -70,6 +72,7 @@ streamReadResponseFields :: AbstractStream
                          -> IO (Maybe GlobalResponse)
 streamReadResponseFields stream requestName request = do
   case requestName of
+{-
     "tcpip-forward" -> do
       case globalRequestPortToBind request of
         0 -> do
@@ -84,4 +87,5 @@ streamReadResponseFields stream requestName request = do
         _ -> return $ Just GlobalResponseNone { }
     "cancel-tcpip-forward" -> do
       return $ Just GlobalResponseNone { }
+-}
     _ -> error "Unknown SSH global response."

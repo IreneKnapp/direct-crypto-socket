@@ -97,6 +97,7 @@ streamReadChannelOpenFields :: AbstractStream
                             -> IO (Maybe ChannelOpen)
 streamReadChannelOpenFields stream channelType = do
   case channelType of
+{-
     "session" -> do
       return $ Just ChannelOpenSession { }
     "x11" -> do
@@ -147,6 +148,7 @@ streamReadChannelOpenFields stream channelType = do
                              channelOpenOriginatorPort
                                = fromJust maybeOriginatorPort
                            }
+-}
     _ -> error "Unknown SSH channel type."
 
 
@@ -156,6 +158,7 @@ streamReadChannelOpenConfirmationFields :: AbstractStream
                                         -> IO (Maybe ChannelOpenConfirmation)
 streamReadChannelOpenConfirmationFields stream channelType channelOpen = do
   case channelType of
+{-
     "session" -> do
       return $ Just ChannelOpenConfirmationNone { }
     "x11" -> do
@@ -164,6 +167,7 @@ streamReadChannelOpenConfirmationFields stream channelType channelOpen = do
       return $ Just ChannelOpenConfirmationNone { }
     "direct-tcpip" -> do
       return $ Just ChannelOpenConfirmationNone { }
+-}
     _ -> error "Unknown SSH channel type."
 
 
@@ -172,6 +176,7 @@ streamReadChannelRequestFields :: AbstractStream
                                -> IO (Maybe ChannelRequest)
 streamReadChannelRequestFields stream requestType = do
   case requestType of
+{-
     "pty-req" -> do
       maybeTerminalType <- streamReadString stream
       maybeTerminalWidthCharacters <- streamReadWord32 stream
@@ -309,4 +314,5 @@ streamReadChannelRequestFields stream requestType = do
                              channelRequestLanguageTag
                                = fromJust maybeLanguageTag
                            }
+-}
     _ -> error "Unknown SSH channel-request type."

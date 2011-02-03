@@ -49,7 +49,7 @@ sshClient hostname = do
   case maybeIdentification of
     Nothing -> error "SSH identification string not received."
     Just identification -> do
-      (stream, transportState) <- startSSH stream SSHClient
+      transportState <- startSSH stream SSHClient
       cookie <- generateCookie
       let outboundKeyExchangeInitMessage
             = SSHMessageKeyExchangeInit {
@@ -74,7 +74,9 @@ sshClient hostname = do
                   sshMessageLanguagesServerToClient = [""],
                   sshMessageFirstKeyExchangePacketFollows = False
                 }
-      streamSendSSHMessage stream outboundKeyExchangeInitMessage
+      transportState <- streamSendSSHMessage stream
+                                             transportState
+                                             outboundKeyExchangeInitMessage
       maybeResult <- streamReadSSHMessage stream transportState
       case maybeResult of
         Nothing -> error "Unexpectedly disconnected."

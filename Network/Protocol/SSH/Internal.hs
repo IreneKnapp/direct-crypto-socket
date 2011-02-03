@@ -1,15 +1,23 @@
 module Network.Protocol.SSH.Internal (
+                                      streamReadWord32,
+                                      streamReadWord8,
+                                      packWord32,
+                                      packWord8,
                                       packNameList,
                                       packString,
                                       packBinaryString,
                                       packBoolean,
-                                      streamReadNameList,
-                                      streamReadString,
-                                      streamReadBinaryString,
-                                      streamReadBoolean
+                                      unpackRaw,
+                                      unpackWord32,
+                                      unpackWord8,
+                                      unpackNameList,
+                                      unpackString,
+                                      unpackBinaryString,
+                                      unpackBoolean
                                      )
   where
 
+import Data.Bits
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.UTF8 as UTF8
@@ -17,6 +25,35 @@ import qualified Data.List as L
 import Data.Word
 
 import Internal.AbstractStreams
+
+
+streamReadWord32 :: AbstractStream -> IO (Maybe Word32)
+streamReadWord32 stream = do
+  maybeBytestring <- streamRead stream 4
+  case maybeBytestring of
+    Nothing -> return Nothing
+    Just bytestring -> let (result, _) = unpackWord32 bytestring
+                       in return result
+
+
+streamReadWord8 :: AbstractStream -> IO (Maybe Word8)
+streamReadWord8 stream = do
+  maybeBytestring <- streamRead stream 1
+  case maybeBytestring of
+    Nothing -> return Nothing
+    Just bytestring -> let (result, _) = unpackWord8 bytestring
+                       in return result
+
+
+packWord32 :: Word32 -> ByteString
+packWord32 word = BS.pack [fromIntegral $ shiftR word 24,
+                           fromIntegral $ shiftR word 16,
+                           fromIntegral $ shiftR word 8,
+                           fromIntegral $ shiftR word 0]
+
+
+packWord8 :: Word8 -> ByteString
+packWord8 word = BS.pack [fromIntegral $ shiftR word 0]
 
 
 packNameList :: [String] -> ByteString
@@ -42,44 +79,76 @@ packBoolean boolean =
                 True -> 1
 
 
-streamReadNameList :: AbstractStream -> IO (Maybe [String])
-streamReadNameList stream = do
-  maybeString <- streamReadString stream
-  case maybeString of
-    Nothing -> return Nothing
-    Just string -> do
-      return $ Just $ loop [] string
-      where loop results string =
-              case L.elemIndex ',' string of
-                Nothing -> results ++ [string]
-                Just index -> loop (results ++ [take index string])
-                                   (drop (index + 1) string)
+unpackRaw :: Int -> ByteString -> (Maybe ByteString, ByteString)
+unpackRaw size bytestring =
+  let consumedPortion = BS.take size bytestring
+      rest = BS.drop size bytestring
+      maybeResult =
+        if BS.length consumedPortion == size
+           then Just consumedPortion
+           else Nothing
+  in (maybeResult, rest)
 
 
-streamReadString :: AbstractStream -> IO (Maybe String)
-streamReadString stream = do
-  maybeLength <- streamReadWord32 stream
-  case maybeLength of
-    Nothing -> return Nothing
-    Just length -> do
-      maybePayload <- streamRead stream $ fromIntegral length
-      case maybePayload of
-        Nothing -> return Nothing
-        Just payload -> return $ Just $ UTF8.toString payload
+unpackWord32 :: ByteString -> (Maybe Word32, ByteString)
+unpackWord32 bytestring =
+  let consumedPortion = BS.take 4 bytestring
+      rest = BS.drop 4 bytestring
+      maybeResult =
+        if BS.length consumedPortion == 4
+          then let [a1, a2, a3, a4] = BS.unpack consumedPortion
+               in Just $ shiftL (fromIntegral a1) 24
+                         + shiftL (fromIntegral a2) 16
+                         + shiftL (fromIntegral a3) 8
+                         + shiftL (fromIntegral a4) 0
+          else Nothing
+  in (maybeResult, rest)
 
 
-streamReadBinaryString :: AbstractStream -> IO (Maybe ByteString)
-streamReadBinaryString stream = do
-  maybeLength <- streamReadWord32 stream
-  case maybeLength of
-    Nothing -> return Nothing
-    Just length -> streamRead stream $ fromIntegral length
+unpackWord8 :: ByteString -> (Maybe Word8, ByteString)
+unpackWord8 bytestring =
+  let consumedPortion = BS.take 1 bytestring
+      rest = BS.drop 1 bytestring
+      maybeResult =
+        if BS.length consumedPortion == 1
+          then let [a1] = BS.unpack consumedPortion
+               in Just $ shiftL (fromIntegral a1) 0
+          else Nothing
+  in (maybeResult, rest)
 
 
-streamReadBoolean :: AbstractStream -> IO (Maybe Bool)
-streamReadBoolean stream = do
-  maybeValue <- streamReadWord8 stream
-  case maybeValue of
-    Nothing -> return Nothing
-    Just 0 -> return $ Just False
-    Just _ -> return $ Just True
+unpackNameList :: ByteString -> (Maybe [String], ByteString)
+unpackNameList bytestring =
+  let (maybeString, remainingBytestring) = unpackString bytestring
+      maybeResults = fmap (\string -> loop [] string) maybeString
+      loop results string =
+             case L.elemIndex ',' string of
+               Nothing -> results ++ [string]
+               Just index -> loop (results ++ [take index string])
+                                  (drop (index + 1) string)
+  in (maybeResults, remainingBytestring)
+
+
+unpackString :: ByteString -> (Maybe String, ByteString)
+unpackString bytestring =
+  let (maybeBinaryString, bytestring') = unpackBinaryString bytestring
+      maybeString = fmap UTF8.toString maybeBinaryString
+  in (maybeString, bytestring')
+
+
+unpackBinaryString :: ByteString -> (Maybe ByteString, ByteString)
+unpackBinaryString bytestring =
+  let (maybeSize, bytestring') = unpackWord32 bytestring
+  in case maybeSize of
+       Nothing -> (Nothing, bytestring')
+       Just size -> unpackRaw (fromIntegral size) bytestring'
+
+
+unpackBoolean :: ByteString -> (Maybe Bool, ByteString)
+unpackBoolean bytestring =
+  let (maybeValue, bytestring') = unpackWord8 bytestring
+      maybeResult = fmap (\value -> case value of
+                                      0 -> False
+                                      _ -> True)
+                         maybeValue
+  in (maybeResult, bytestring')
